@@ -11,3 +11,10 @@ execute_tests.exe
 *.uf2
 *.elf
 *.map
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
