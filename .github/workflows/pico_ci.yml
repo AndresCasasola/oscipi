@@ -17,12 +17,14 @@ jobs:
 
       - name: Run Unit Tests
         run: |
-          # Replicamos exactamente tu comando de local pero en Linux
-          gcc ./src/blink.c ./test/test_blink.c ./unity/unity.c -I ./unity/ -I ./test/ -I ./src/ -DUNIT_TESTING -o ejecutar_tests
-          ./ejecutar_tests
+          # Compile the test using the standard Linux GCC
+          gcc ./src/blink.c ./test/test_blink.c ./unity/unity.c -I ./unity/ -I ./test/ -I ./src/ -DUNIT_TESTING -o run_tests
+          # Execute the resulting binary
+          ./run_tests
 
       - name: Setup Pico SDK
         run: |
+          # Clone the SDK and initialize submodules
           git clone --depth 1 https://github.com/raspberrypi/pico-sdk.git $HOME/pico-sdk
           echo "PICO_SDK_PATH=$HOME/pico-sdk" >> $GITHUB_ENV
           cd $HOME/pico-sdk && git submodule update --init
@@ -31,5 +33,6 @@ jobs:
         run: |
           mkdir build
           cd build
+          # Configure and build using Ninja
           cmake .. -G Ninja
           cmake --build .
