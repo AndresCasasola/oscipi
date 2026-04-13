@@ -1,0 +1,13 @@
+# Compilación local
+build/
+execute_tests.exe
+.pico-sdk/
+
+# Archivos temporales de VS Code
+.vscode/
+.cmake/
+
+# Binarios generados
+*.uf2
+*.elf
+*.map
