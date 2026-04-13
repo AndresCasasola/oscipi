@@ -1,0 +1,35 @@
+name: Pico OS CI
+
+on: [push, pull_request]
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-none-eabi cmake ninja-build gcc
+
+      - name: Run Unit Tests
+        run: |
+          # Replicamos exactamente tu comando de local pero en Linux
+          gcc ./src/blink.c ./test/test_blink.c ./unity/unity.c -I ./unity/ -I ./test/ -I ./src/ -DUNIT_TESTING -o ejecutar_tests
+          ./ejecutar_tests
+
+      - name: Setup Pico SDK
+        run: |
+          git clone --depth 1 https://github.com/raspberrypi/pico-sdk.git $HOME/pico-sdk
+          echo "PICO_SDK_PATH=$HOME/pico-sdk" >> $GITHUB_ENV
+          cd $HOME/pico-sdk && git submodule update --init
+
+      - name: Build Firmware (.uf2)
+        run: |
+          mkdir build
+          cd build
+          cmake .. -G Ninja
+          cmake --build .
