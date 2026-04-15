@@ -1,40 +1,42 @@
 name: Pico OS CI
 
-on: [push, pull_request]
+on:
+  push:
+    branches: [ main, release ]
+  pull_request:
+    branches: [ main ]
 
 jobs:
   test-and-build:
+    name: Unit Tests & Firmware Compilation
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
+      - name: Checkout Code
         uses: actions/checkout@v4
         with:
-          submodules: recursive  # <--- Pull FreeRTOS
-          fetch-depth: 0  # <--- Download all tags and historics.
+          submodules: recursive
+          fetch-depth: 0
 
-      - name: Install dependencies
+      - name: Force Submodule Update
+        run: |
+          git submodule sync --recursive
+          git submodule update --init --recursive --force
+
+      - name: Install Build Tools
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-arm-none-eabi cmake ninja-build gcc
 
       - name: Run Unit Tests
-        run: |
-          # Compile the test using the standard Linux GCC
-          gcc ./src/main.c ./test/test_main.c ./unity/unity.c -I ./unity/ -I ./src/ -DUNIT_TEST -o run_tests
-          ./run_tests
+        shell: pwsh
+        run: ./scripts/run_tests.ps1
 
-      - name: Setup Pico SDK
+      - name: List files for debugging
         run: |
-          # Clone the SDK and initialize submodules
-          git clone --depth 1 https://github.com/raspberrypi/pico-sdk.git $HOME/pico-sdk
-          echo "PICO_SDK_PATH=$HOME/pico-sdk" >> $GITHUB_ENV
-          cd $HOME/pico-sdk && git submodule update --init
+          ls -ld lib/pico-sdk
+          ls lib/pico-sdk/pico_sdk_init.cmake
 
       - name: Build Firmware (.uf2)
-        run: |
-          mkdir build
-          cd build
-          # Configure and build using Ninja
-          cmake .. -G Ninja
-          cmake --build .
+        shell: pwsh
+        run: ./scripts/build_firmware.ps1 -Clean
