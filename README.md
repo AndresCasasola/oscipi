@@ -32,10 +32,38 @@
 └── run_gui.sh          # One-click launcher (Linux/macOS)
 ```
 
-### "Quality of Life" tip for Linux:
-Many Linux distros (like Ubuntu) don't come with the venv module installed by default. If your user gets an error, they might need to run:
+## 3. Getting Started (Firmware)
+### Prerequisites:
+- Pico SDK v2.2.0+
+- ARM GCC Toolchain
+- Ninja (Recommended) or Make.
+- picotool (Essential for a smooth workflow).
 
-## 3. System Architectures
+### Compilation
+From the project root:
+```powershell
+# 1. Create and enter build directory
+# Pro tip: If you want a clean rebuild, delete everything inside 'build' first:
+# Remove-Item -Recurse -Force * (Execute from build directory)
+cd build
+# 2. Configure project
+cmake .. -G Ninja
+# 3. Build firmware
+cmake --build .
+```
+
+### Flashing the Pico
+You can use the picotool utility to flash without touching the hardware:
+``` PowerShell
+# 1. Force the Pico into BOOTSEL mode via USB
+picotool reboot -f -u
+# 2. Upload and execute the binary
+picotool load -x app.uf2
+```
+
+Note: If picotool is not available, hold the BOOTSEL button while connecting the Pico and drag the .uf2 file into the RPI-RP2 drive.
+
+## 4. System Architecture
 
 The project is split into two main domains: the **Real-Time Firmware** (RP2040) and the **High-Level UI** (Python).
 
@@ -92,7 +120,7 @@ graph TD
     PC_RX -.->|Trigger/Scale Config| T_PROC[Processing Task]
 ```
 
-### 4. Threading & Communication Strategy
+## 5. Threading & Communication
 
 To ensure a smooth user experience without "freezing" the interface, the application implements a **Producer-Consumer** pattern:
 
@@ -104,3 +132,14 @@ To ensure a smooth user experience without "freezing" the interface, the applica
     * **Serial Thread:** A dedicated background thread continuously listens to the COM port. This prevents the GUI from lagging while waiting for data.
     * **Queue Management:** Data is passed to the UI using a thread-safe buffer.
     * **UI Thread (PyQtGraph):** Every 20ms, the UI "wakes up," grabs the latest batch of samples from the buffer, and updates the plot using vectorized NumPy operations.
+
+## 6. Development Tips
+### Quality of Life (Linux)
+Many Linux distros don't come with the venv module installed by default. If you encounter errors creating the environment, run:
+
+```Bash
+sudo apt install python3-venv
+```
+
+### FreeRTOS Insight
+The kernel is configured to handle the RP2040's architecture with specific mapping for `isr_svcall`, `isr_pendsv`, and `isr_systick` to ensure the RTOS scheduler takes control of the hardware interrupts.

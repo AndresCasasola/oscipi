@@ -33,20 +33,25 @@ project(blink C CXX ASM)
 # Initialise the Raspberry Pi Pico SDK
 pico_sdk_init()
 
-# Add executable. Default name is the project name, version 0.1
+set(FREERTOS_KERNEL_PATH ${CMAKE_CURRENT_LIST_DIR}/FreeRTOS-Kernel)
 
+add_subdirectory(FreeRTOS-Kernel/portable/ThirdParty/GCC/RP2040 FreeRTOS_Kernel)
+
+# Add executable
 add_executable(blink
     src/blink.c
-    )
+)
 
 pico_enable_stdio_usb(blink 1)
 
-# pull in common dependencies
-target_link_libraries(blink pico_stdlib)
+# Pull in common dependencies
+target_link_libraries(blink 
+    pico_stdlib
+    FreeRTOS-Kernel-Heap4
+)
 
-if (PICO_CYW43_SUPPORTED)
-    target_link_libraries(blink pico_cyw43_arch_none)
-endif()
+# Tell to FreeRTOS where is the FreeRTOSConfig.h file
+target_include_directories(blink PRIVATE ${CMAKE_CURRENT_LIST_DIR}/src)
 
 # create map/bin/hex file etc.
 pico_add_extra_outputs(blink)
