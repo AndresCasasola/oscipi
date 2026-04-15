@@ -7,6 +7,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # Set dependency paths
 set(PICO_SDK_PATH "${CMAKE_CURRENT_SOURCE_DIR}/lib/pico-sdk")
 set(FREERTOS_KERNEL_PATH "${CMAKE_CURRENT_SOURCE_DIR}/lib/FreeRTOS-Kernel")
+set(UNITY_PATH "${CMAKE_CURRENT_SOURCE_DIR}/lib/unity")
 
 set(PICO_BOARD pico CACHE STRING "Board type")
 
@@ -14,6 +15,7 @@ set(PICO_BOARD pico CACHE STRING "Board type")
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 include(cmake/pico_sdk_import.cmake)
 include(cmake/freertos_import.cmake)
+include(cmake/unity_import.cmake)
 
 # Project name
 project(oscipi C CXX ASM)
