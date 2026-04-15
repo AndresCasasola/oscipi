@@ -7,43 +7,53 @@
 **Oscipi** is a digital oscilloscope powered by the RP2040. It features a robust C firmware backed by a real-time Python user interface.
 
 ---
-
-## 1. Features
+## 1. About this project
+### System Features
 
 * **Real-Time Visualization:** High-performance GUI using `PyQtGraph` for low-latency signal rendering.
 * **Bunkerized Architecture:** All dependencies (SDK, FreeRTOS, Unity) are encapsulated within the repository as git submodules.
 * **Test-Driven Development:** Firmware logic validated via Unity unit testing framework with a dedicated native test runner.
 * **Automated CI/CD:** GitHub Actions pipeline for automated testing and firmware compilation (.uf2).
 
-## 2. Repository Structure
+### Repository Structure
 
 ```text
 .
-├── .github/                # CI/CD Workflows (GitHub Actions)
-├── cmake/                  # Modular CMake scripts
-├── gui/                    # Desktop Application (Python + PyQtGraph)
-│   └── main_ui.py          # Main Entry point for the GUI
-├── lib/                  # THE BUNKER: External dependencies (Submodules)
-│   ├── FreeRTOS-Kernel/  # Real-Time OS Kernel
-│   ├── pico-sdk/         # Raspberry Pi Pico Official SDK
-│   └── unity/            # Unity Test Library
-├── scripts/                # Automation scripts (Agnostic build & test runners)
-│   ├── run_tests.ps1       # Native Unit Test runner (PowerShell)
-│   └── build_firmware.ps1  # Firmware compilation helper
-├── src/                    # Firmware Source Code (C / FreeRTOS)
-│   ├── main.c              # Application Entry & Tasks
-│   └── FreeRTOSConfig.h    # Kernel Configuration
-├── test/                   # Unit Tests (C / Unity Framework)
-├── .gitignore              # Version control exclusion rules
-├── .gitmodules             # Git submodule configuration and paths
-├── CMakeLists.txt          # Build configuration for Raspberry Pi Pico
-├── requirements.txt        # Python package dependencies
-├── run_gui.bat             # One-click launcher (Windows)
-└── run_gui.sh              # One-click launcher (Linux/macOS)
+├── .github/                        # CI/CD Workflows (GitHub Actions)
+├── cmake/                          # Modular CMake scripts
+├── gui/                            # Desktop Application (Python + PyQtGraph)
+│   └── main_ui.py                  # Main Entry point for the GUI
+├── lib/                            # THE BUNKER: External dependencies (Submodules)
+│   ├── FreeRTOS-Kernel/            # Real-Time OS Kernel
+│   ├── pico-sdk/                   # Raspberry Pi Pico Official SDK
+│   └── unity/                      # Unity Test Library
+├── scripts/                        # Automation scripts (Agnostic build & test runners)
+│   ├── run_tests.ps1               # Native Unit Test runner (PowerShell)
+│   └── build_firmware.ps1          # Firmware compilation helper
+├── src/                            # Firmware Source Code (C / FreeRTOS)
+│   ├── main.c                      # Application Entry & Tasks
+│   └── FreeRTOSConfig.h            # Kernel Configuration
+├── test/                           # Unit Tests (C / Unity Framework)
+├── .gitignore                      # Version control exclusion rules
+├── .gitmodules                     # Git submodule configuration and paths
+├── CMakeLists.txt                  # Build configuration for Raspberry Pi Pico
+├── requirements.txt                # Python package dependencies
+├── run_gui.bat                     # One-click launcher (Windows)
+└── run_gui.sh                      # One-click launcher (Linux/macOS)
 ```
 
-## 3. Getting Started (Firmware)
-### Prerequisites:
+### Dependencies version
+This project uses a "Bunker" strategy where specific versions of libraries are locked as git submodules to ensure build reproducibility:
+
+| Dependency | Version | Description |
+| :--- | :--- | :--- |
+| **Raspberry Pi Pico SDK** | `v2.2.0` | Core hardware abstraction layer and build system. |
+| **FreeRTOS Kernel** | `V11.3.0` | Real-time operating system for task management. |
+| **Unity** | `v2.6.1` | Unit testing framework for C. |
+
+## 2. Getting Started (Firmware)
+
+### 1. Prerequisites:
 To keep this project editor-agnostic, ensure the following tools are in your system PATH:
 
 - **ARM GCC Toolchain:** For cross-compiling to the RP2040.
@@ -51,9 +61,9 @@ To keep this project editor-agnostic, ensure the following tools are in your sys
 - **CMake & Ninja:** Build system and generator.
 - **Python 3.10+:** For the GUI and auxiliary scripts.
 
-**Click here to see how to install this tools and add them to your system PATH.**
+**[Click here to see how to install these tools and add them to your system PATH.](#)**
 
-### Local Unit Testing (Agnostic)
+### 2. Local Unit Testing (Agnostic)
 You don't need a Pico to verify the logic. Simply run the automated script:
 
 ```PowerShell
@@ -62,17 +72,26 @@ You don't need a Pico to verify the logic. Simply run the automated script:
 ```
 Note: This script creates a temporary build_tests/ directory to keep your workspace clean.
 
-### Compilation
-The project is designed to be built from any terminal, independent of VS Code or other IDEs:
+### 3.1 Automated Build (Recommended)
+We provide a PowerShell script that handles the entire process, ensuring the environment is correctly initialized:
 ```powershell
-# 1. Configure project (Detects local lib/pico-sdk automatically)
-cmake -S . -B build -G Ninja
+# Build the firmware (results will be in /build)
+./scripts/build_firmware.ps1
+# If you encounter "Cache" errors or after updating submodules:
+./scripts/build_firmware.ps1 -Clean
+```
+Note: Stuck with Cache Errors? If CMake complains about missing project names or broken paths, always use the -Clean flag. It wipes the temporary build files and re-scans the lib/ directory from scratch.
 
+### 3.2 Manual CMake Build
+If you prefer the standard way, the project is designed to be independent of any IDE:
+```powershell
+# 1. Configure project
+cmake -S . -B build -G Ninja
 # 2. Build firmware
 cmake --build build
 ```
 
-### Flashing the Pico
+### 4. Flashing the Pico
 You can use the picotool utility to flash without touching the hardware:
 ``` PowerShell
 # 1. Force the Pico into BOOTSEL mode via USB
@@ -83,9 +102,11 @@ picotool load -x app.uf2
 
 Note: If picotool is not available, hold the BOOTSEL button while connecting the Pico and drag the .uf2 file into the RPI-RP2 drive.
 
-## 4. System Architecture
+## 3. Software Architecture
 
 The project is split into two main domains: the **Real-Time Firmware** (RP2040) and the **High-Level UI** (Python).
+
+### Diagrams
 
 ```mermaid
 graph LR
@@ -140,7 +161,7 @@ graph TD
     PC_RX -.->|Trigger/Scale Config| T_PROC[Processing Task]
 ```
 
-## 5. Threading & Communication
+### Threading & Communication
 
 To ensure a smooth user experience without "freezing" the interface, the application implements a **Producer-Consumer** pattern:
 
@@ -153,26 +174,26 @@ To ensure a smooth user experience without "freezing" the interface, the applica
     * **Queue Management:** Data is passed to the UI using a thread-safe buffer.
     * **UI Thread (PyQtGraph):** Every 20ms, the UI "wakes up," grabs the latest batch of samples from the buffer, and updates the plot using vectorized NumPy operations.
 
-## 6. Development Tips
-### Quality of Life (Linux)
+## 4. Development Tips
+### 1. Quality of Life (Linux)
 Many Linux distros don't come with the venv module installed by default. If you encounter errors creating the environment, run:
 
 ```Bash
 sudo apt install python3-venv
 ```
 
-### Editor Independence
+### 2. Editor Independence
 While VS Code is supported via the CMake Tools extension, it is not required. The project can be fully managed via CLI using the scripts provided in /scripts.
 
-### Unit Testing Strategy
+### 3. Unit Testing Strategy
 Tests are compiled for the host architecture (Windows/Linux) using the -DUNIT_TEST flag. This flag is used in src/ to mock hardware-specific headers (like hardware/adc.h) that are not available on a PC.
 
-### Submodule Management
+### 4. Submodule Management
 If you cloned the repository without submodules, initialize the bunker with:
 ```Bash
 git submodule update --init --recursive
 ```
 Anyway the project uses custom cmake/X_import.cmake scripts. If you clone the repo without --recursive, simply running cmake will automatically detect the missing files and perform a git submodule update to the correct version.
 
-### FreeRTOS Insight
+### 5. FreeRTOS Insight
 The kernel is configured to handle the RP2040's architecture with specific mapping for `isr_svcall`, `isr_pendsv`, and `isr_systick` to ensure the RTOS scheduler takes control of the hardware interrupts.
