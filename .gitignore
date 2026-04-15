@@ -1,6 +1,6 @@
 # Compilación local
 build/
-execute_tests.exe
+run_tests.exe
 .pico-sdk/
 
 # Archivos temporales de VS Code
