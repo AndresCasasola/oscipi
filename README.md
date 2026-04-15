@@ -11,60 +11,63 @@
 ## 1. Features
 
 * **Real-Time Visualization:** High-performance GUI using `PyQtGraph` for low-latency signal rendering.
-* **Test-Driven Development:** Firmware logic validated via `Unity` unit testing framework.
-* **Automated CI/CD:** GitHub Actions pipeline for automated testing and firmware compilation (`.uf2`).
-* **Cross-Platform:** One-click launchers for Windows and Linux environments.
+* **Bunkerized Architecture:** All dependencies (SDK, FreeRTOS, Unity) are encapsulated within the repository as git submodules.
+* **Test-Driven Development:** Firmware logic validated via Unity unit testing framework with a dedicated native test runner.
+* **Automated CI/CD:** GitHub Actions pipeline for automated testing and firmware compilation (.uf2).
 
 ## 2. Repository Structure
 
 ```text
 .
-├── .github/              # CI/CD Workflows (GitHub Actions)
-├── cmake/                # Modular CMake scripts (SDK & FreeRTOS imports)
-├── gui/                  # Desktop Application (Python + PyQtGraph)
-│   └── main_ui.py        # Main Entry point for the GUI
-├── src/                  # Firmware Source Code (C / FreeRTOS)
-│   ├── main.c            # Application Entry & Tasks
-│   └── FreeRTOSConfig.h  # Kernel Configuration
-├── test/                 # Unit Tests (C / Unity Framework)
-│   └── test_main.c       # Hardware logic validation
-├── unity/                # Unity Test Library source
-├── FreeRTOS-Kernel/      # FreeRTOS Source (Git Submodule)
-├── .gitignore            # Version control exclusion rules
-├── .gitmodules           # Git submodule configuration and paths
-├── CMakeLists.txt        # Build configuration for Raspberry Pi Pico
-├── requirements.txt      # Python package dependencies
-├── run_gui.bat           # One-click launcher (Windows)
-└── run_gui.sh            # One-click launcher (Linux/macOS)
+├── .github/                # CI/CD Workflows (GitHub Actions)
+├── cmake/                  # Modular CMake scripts
+├── gui/                    # Desktop Application (Python + PyQtGraph)
+│   └── main_ui.py          # Main Entry point for the GUI
+├── lib/                  # THE BUNKER: External dependencies (Submodules)
+│   ├── FreeRTOS-Kernel/  # Real-Time OS Kernel
+│   ├── pico-sdk/         # Raspberry Pi Pico Official SDK
+│   └── unity/            # Unity Test Library
+├── scripts/                # Automation scripts (Agnostic build & test runners)
+│   ├── run_tests.ps1       # Native Unit Test runner (PowerShell)
+│   └── build_firmware.ps1  # Firmware compilation helper
+├── src/                    # Firmware Source Code (C / FreeRTOS)
+│   ├── main.c              # Application Entry & Tasks
+│   └── FreeRTOSConfig.h    # Kernel Configuration
+├── test/                   # Unit Tests (C / Unity Framework)
+├── .gitignore              # Version control exclusion rules
+├── .gitmodules             # Git submodule configuration and paths
+├── CMakeLists.txt          # Build configuration for Raspberry Pi Pico
+├── requirements.txt        # Python package dependencies
+├── run_gui.bat             # One-click launcher (Windows)
+└── run_gui.sh              # One-click launcher (Linux/macOS)
 ```
 
 ## 3. Getting Started (Firmware)
 ### Prerequisites:
-- Pico SDK v2.2.0+
-- ARM GCC Toolchain
-- Native GCC (Required only for running local unit tests)
-- Ninja (Recommended) or Make.
-- picotool (Essential for a smooth workflow).
+To keep this project editor-agnostic, ensure the following tools are in your system PATH:
 
-### Local Unit Testing (Before Push)
-To ensure the logic is correct without needing the physical hardware, run the unit tests locally using your native compiler:
+- **ARM GCC Toolchain:** For cross-compiling to the RP2040.
+- **Native GCC:** (e.g., MinGW on Windows) For running local unit tests.
+- **CMake & Ninja:** Build system and generator.
+- **Python 3.10+:** For the GUI and auxiliary scripts.
+
+**Click here to see how to install this tools and add them to your system PATH.**
+
+### Local Unit Testing (Agnostic)
+You don't need a Pico to verify the logic. Simply run the automated script:
 
 ```PowerShell
-# 1. Compile the tests with the UNIT_TEST flag
-# This mocks the hardware and FreeRTOS calls
-gcc -DUNIT_TEST -Iunity -Isrc test/test_main.c src/main.c unity/unity.c -o run_tests
-
-# 2. Execute the test suite
-./run_tests.exe
+# Run tests using the local GCC compiler
+./scripts/run_tests.ps1
 ```
+Note: This script creates a temporary build_tests/ directory to keep your workspace clean.
 
 ### Compilation
-From the project root:
+The project is designed to be built from any terminal, independent of VS Code or other IDEs:
 ```powershell
-# Pro tip: If you want a clean rebuild, delete everything inside 'build' first:
-# Remove-Item -Recurse -Force build
-# 1. Configure project
+# 1. Configure project (Detects local lib/pico-sdk automatically)
 cmake -S . -B build -G Ninja
+
 # 2. Build firmware
 cmake --build build
 ```
@@ -158,8 +161,18 @@ Many Linux distros don't come with the venv module installed by default. If you 
 sudo apt install python3-venv
 ```
 
-### Automated Dependency Management
-The project uses a custom cmake/freertos_import.cmake script. If you clone the repo without --recursive, simply running cmake will automatically detect the missing files and perform a git submodule update to the correct version (V11.3.0).
+### Editor Independence
+While VS Code is supported via the CMake Tools extension, it is not required. The project can be fully managed via CLI using the scripts provided in /scripts.
+
+### Unit Testing Strategy
+Tests are compiled for the host architecture (Windows/Linux) using the -DUNIT_TEST flag. This flag is used in src/ to mock hardware-specific headers (like hardware/adc.h) that are not available on a PC.
+
+### Submodule Management
+If you cloned the repository without submodules, initialize the bunker with:
+```Bash
+git submodule update --init --recursive
+```
+Anyway the project uses custom cmake/X_import.cmake scripts. If you clone the repo without --recursive, simply running cmake will automatically detect the missing files and perform a git submodule update to the correct version.
 
 ### FreeRTOS Insight
 The kernel is configured to handle the RP2040's architecture with specific mapping for `isr_svcall`, `isr_pendsv`, and `isr_systick` to ensure the RTOS scheduler takes control of the hardware interrupts.
