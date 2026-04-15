@@ -19,25 +19,44 @@
 
 ```text
 .
-├── .github/            # CI/CD Workflows (GitHub Actions)
-├── gui/                # Desktop Application (Python + PyQtGraph)
-│   └── main_ui.py      # Main Entry point for the GUI
-├── src/                # Firmware Source Code (C / Pico SDK)
-├── test/               # Unit Tests (C / Unity Framework)
-├── unity/              # Unity Test Library source
-├── .gitignore          # Version control exclusion rules
-├── CMakeLists.txt      # Build configuration for Raspberry Pi Pico
-├── requirements.txt    # Python package dependencies
-├── run_gui.bat         # One-click launcher (Windows)
-└── run_gui.sh          # One-click launcher (Linux/macOS)
+├── .github/              # CI/CD Workflows (GitHub Actions)
+├── cmake/                # Modular CMake scripts (SDK & FreeRTOS imports)
+├── gui/                  # Desktop Application (Python + PyQtGraph)
+│   └── main_ui.py        # Main Entry point for the GUI
+├── src/                  # Firmware Source Code (C / FreeRTOS)
+│   ├── main.c            # Application Entry & Tasks
+│   └── FreeRTOSConfig.h  # Kernel Configuration
+├── test/                 # Unit Tests (C / Unity Framework)
+│   └── test_main.c       # Hardware logic validation
+├── unity/                # Unity Test Library source
+├── FreeRTOS-Kernel/      # FreeRTOS Source (Git Submodule)
+├── .gitignore            # Version control exclusion rules
+├── .gitmodules           # Git submodule configuration and paths
+├── CMakeLists.txt        # Build configuration for Raspberry Pi Pico
+├── requirements.txt      # Python package dependencies
+├── run_gui.bat           # One-click launcher (Windows)
+└── run_gui.sh            # One-click launcher (Linux/macOS)
 ```
 
 ## 3. Getting Started (Firmware)
 ### Prerequisites:
 - Pico SDK v2.2.0+
 - ARM GCC Toolchain
+- Native GCC (Required only for running local unit tests)
 - Ninja (Recommended) or Make.
 - picotool (Essential for a smooth workflow).
+
+### Local Unit Testing (Before Push)
+To ensure the logic is correct without needing the physical hardware, run the unit tests locally using your native compiler:
+
+```PowerShell
+# 1. Compile the tests with the UNIT_TEST flag
+# This mocks the hardware and FreeRTOS calls
+gcc -DUNIT_TEST -Iunity -Isrc test/test_main.c src/main.c unity/unity.c -o run_tests
+
+# 2. Execute the test suite
+./run_tests.exe
+```
 
 ### Compilation
 From the project root:
@@ -140,6 +159,9 @@ Many Linux distros don't come with the venv module installed by default. If you 
 ```Bash
 sudo apt install python3-venv
 ```
+
+### Automated Dependency Management
+The project uses a custom cmake/freertos_import.cmake script. If you clone the repo without --recursive, simply running cmake will automatically detect the missing files and perform a git submodule update to the correct version (V11.3.0).
 
 ### FreeRTOS Insight
 The kernel is configured to handle the RP2040's architecture with specific mapping for `isr_svcall`, `isr_pendsv`, and `isr_systick` to ensure the RTOS scheduler takes control of the hardware interrupts.

@@ -1,50 +1,63 @@
 #include <stdio.h>
-#include "pico/stdlib.h"
-#include "FreeRTOS.h"
-#include "task.h"
 
-// Definimos el pin del LED para la Pico estándar
-const uint LED_PIN = PICO_DEFAULT_LED_PIN; // Normalmente el pin 25
+#ifndef UNIT_TEST
+    #include "pico/stdlib.h"
+    #include "FreeRTOS.h"
+    #include "task.h"
+#else
+    #include <stdbool.h>
+    typedef unsigned int uint;
+    #define GPIO_OUT 1
+    #define pdMS_TO_TICKS(x) x
+    #define tight_loop_contents() 
+    
+    // Prototypes for stubs
+    void gpio_init(uint pin);
+    void gpio_set_dir(uint pin, uint dir);
+    void gpio_put(uint pin, bool value);
+    void vTaskDelay(int x);
+    void stdio_init_all(void);
+    void xTaskCreate(void* f, const char* name, int stack, void* param, int prio, void* handle);
+    void vTaskStartScheduler(void);
+#endif
 
-/**
- * Tarea de parpadeo (Blink Task)
- * En FreeRTOS, las tareas son bucles infinitos que nunca deben retornar.
- */
-void vBlinkTask(void *pvParameters) {
-    // Inicializamos el GPIO del LED
+#ifndef PICO_DEFAULT_LED_PIN
+    #define PICO_DEFAULT_LED_PIN 25
+#endif
+
+const uint LED_PIN = PICO_DEFAULT_LED_PIN;
+
+// --- Helper functions for testability ---
+void led_init(void) {
     gpio_init(LED_PIN);
     gpio_set_dir(LED_PIN, GPIO_OUT);
+}
+
+void led_set_state(bool led_on) {
+    gpio_put(LED_PIN, led_on);
+}
+
+// --- Tasks ---
+void vBlinkTask(void *pvParameters) {
+    led_init();
 
     while (true) {
-        gpio_put(LED_PIN, 1);
-        // Usamos vTaskDelay en lugar de sleep_ms. 
-        // Esto libera el procesador para que otras tareas trabajen.
+        led_set_state(true);
         vTaskDelay(pdMS_TO_TICKS(300)); 
 
-        gpio_put(LED_PIN, 0);
+        led_set_state(false);
         vTaskDelay(pdMS_TO_TICKS(300));
     }
 }
 
+// --- Application Entry Point ---
+#ifndef UNIT_TEST
 int main() {
-    // Inicializa USB/UART para poder usar printf en el futuro
     stdio_init_all();
-
-    // Creamos la tarea
-    // 1. Puntero a la función de la tarea
-    // 2. Nombre descriptivo (para debugging)
-    // 3. Tamaño del Stack (en palabras, no bytes)
-    // 4. Parámetros de entrada (ninguno en este caso)
-    // 5. Prioridad (1 es baja, cuanto más alta el número, más prioridad)
-    // 6. Handler de la tarea (no lo necesitamos ahora)
     xTaskCreate(vBlinkTask, "Blink_Task", 256, NULL, 1, NULL);
-
-    // Arrancamos el Scheduler (el corazón de FreeRTOS)
-    // A partir de aquí, FreeRTOS toma el control total del procesador
     vTaskStartScheduler();
-
-    // El código nunca debería llegar aquí
     while (true) {
         tight_loop_contents();
     }
 }
+#endif
