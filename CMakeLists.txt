@@ -24,8 +24,10 @@ endif()
 
 set(PICO_BOARD pico CACHE STRING "Board type")
 
-# Pull in Raspberry Pi Pico SDK (must be before project)
-include(pico_sdk_import.cmake)
+# --- Modular Imports ---
+list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
+include(cmake/pico_sdk_import.cmake)
+include(cmake/freertos_import.cmake)
 
 # Project name
 project(oscipi C CXX ASM)
@@ -35,9 +37,6 @@ pico_sdk_init()
 
 # FreeRTOS Kernel Path
 set(FREERTOS_KERNEL_PATH ${CMAKE_CURRENT_LIST_DIR}/FreeRTOS-Kernel)
-
-# Add the RP2040 specific FreeRTOS port
-add_subdirectory(FreeRTOS-Kernel/portable/ThirdParty/GCC/RP2040 FreeRTOS_Kernel)
 
 # Add executable and main source file
 add_executable(oscipi
