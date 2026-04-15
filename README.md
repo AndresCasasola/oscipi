@@ -61,14 +61,12 @@ gcc -DUNIT_TEST -Iunity -Isrc test/test_main.c src/main.c unity/unity.c -o run_t
 ### Compilation
 From the project root:
 ```powershell
-# 1. Create and enter build directory
 # Pro tip: If you want a clean rebuild, delete everything inside 'build' first:
-# Remove-Item -Recurse -Force * (Execute from build directory)
-cd build
-# 2. Configure project
-cmake .. -G Ninja
-# 3. Build firmware
-cmake --build .
+# Remove-Item -Recurse -Force build
+# 1. Configure project
+cmake -S . -B build -G Ninja
+# 2. Build firmware
+cmake --build build
 ```
 
 ### Flashing the Pico
