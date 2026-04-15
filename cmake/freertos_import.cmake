@@ -5,7 +5,7 @@ find_package(Git REQUIRED)
 set(FREERTOS_TAG "V11.3.0")
 
 # 2. Check if the FreeRTOS-Kernel folder is empty or missing
-if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/FreeRTOS-Kernel/include/FreeRTOS.h")
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/lib/FreeRTOS-Kernel/include/FreeRTOS.h")
     message(STATUS "FreeRTOS-Kernel not found. Initializing...")
     execute_process(
         COMMAND ${GIT_EXECUTABLE} submodule update --init --recursive
@@ -18,7 +18,7 @@ endif()
 message(STATUS "Checking out FreeRTOS version ${FREERTOS_TAG}...")
 execute_process(
     COMMAND ${GIT_EXECUTABLE} checkout ${FREERTOS_TAG}
-    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/FreeRTOS-Kernel"
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/lib/FreeRTOS-Kernel"
     RESULT_VARIABLE GIT_CHECKOUT_RESULT
 )
 
@@ -27,5 +27,5 @@ if(NOT GIT_CHECKOUT_RESULT EQUAL 0)
 endif()
 
 # 4. Set paths and add subdirectory
-set(FREERTOS_KERNEL_PATH ${CMAKE_CURRENT_SOURCE_DIR}/FreeRTOS-Kernel CACHE INTERNAL "")
+set(FREERTOS_KERNEL_PATH ${CMAKE_CURRENT_SOURCE_DIR}/lib/FreeRTOS-Kernel CACHE INTERNAL "")
 add_subdirectory(${FREERTOS_KERNEL_PATH}/portable/ThirdParty/GCC/RP2040 FreeRTOS_Kernel_Build)
