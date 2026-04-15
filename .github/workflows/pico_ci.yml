@@ -9,6 +9,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          submodules: recursive  # <--- Pull FreeRTOS
 
       - name: Install dependencies
         run: |
@@ -18,8 +20,7 @@ jobs:
       - name: Run Unit Tests
         run: |
           # Compile the test using the standard Linux GCC
-          gcc ./src/blink.c ./test/test_blink.c ./unity/unity.c -I ./unity/ -I ./test/ -I ./src/ -DUNIT_TESTING -o run_tests
-          # Execute the resulting binary
+          gcc ./src/main.c ./test/test_main.c ./unity/unity.c -I ./unity/ -I ./src/ -DUNIT_TEST -o run_tests
           ./run_tests
 
       - name: Setup Pico SDK
