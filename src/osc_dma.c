@@ -159,8 +159,8 @@ void osc_dma_init(void) {
     irq_set_enabled(DMA_IRQ_0, true);
 
     // 6. Start the engines!
-    dma_start_channel_mask((1u << data_chan)); // Start the data channel
-    adc_run(true);                             // Start the ADC
+    // dma_start_channel_mask((1u << data_chan)); // Start the data channel
+    // adc_run(true);                             // Start the ADC
 }
 #else
 // Mock for unit tests

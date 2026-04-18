@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include "osc_types.h"
 #include "osc_dma.h"
 #include "osc_processing.h"
 #include "osc_comm.h"
@@ -54,6 +55,34 @@ void vBlinkTask(void *pvParameters) {
     }
 }
 
+// Mock Task to generate fake data and push it to the Processing Task
+void vMockDMATask(void *pvParameters) {
+    adc_buffer_t *current_buffer = NULL;
+    uint32_t counter = 0;
+    
+    while(1) {
+        // Wait for a free buffer
+        if (xQueueReceive(osc_queue_free, &current_buffer, portMAX_DELAY) == pdPASS) {
+            
+            // Fill Metadata
+            current_buffer->sequence_id = counter++;
+            current_buffer->timestamp_us = time_us_32();
+            current_buffer->flags = 0;
+            
+            // Generate a simple Sawtooth Wave for visual testing
+            for(int i = 0; i < SAMPLES_PER_BUFFER; i++) {
+                current_buffer->samples[i] = (i * 4) % 4096;
+            }
+            
+            // Send to Processing Task
+            xQueueSend(osc_queue_ready, &current_buffer, 0);
+            
+            // Delay 20ms (simulate 50 FPS)
+            vTaskDelay(pdMS_TO_TICKS(20));
+        }
+    }
+}
+
 // --- Application Entry Point ---
 #ifndef UNIT_TEST
 int main() {
@@ -63,11 +92,11 @@ int main() {
     stdio_set_translate_crlf(&stdio_usb, false);
 
     // Initialize Architecture Components
-    osc_dma_init();
-    osc_processing_init();
+    osc_dma_init();        // Will initialize queues, but hardware is disabled in osc_dma.c
+    osc_processing_init(); // Will initialize processing queue
 
     // Create FreeRTOS Tasks
-    // Highest priority for processing, lower for comm, lowest for blink
+    xTaskCreate(vMockDMATask, "Mock_Task", 1024, NULL, 4, NULL);
     xTaskCreate(vDataProcessingTask, "Process_Task", 1024, NULL, 3, NULL);
     xTaskCreate(vCommDriverTask, "Comm_Task", 1024, NULL, 2, NULL);
     xTaskCreate(vBlinkTask, "Blink_Task", 256, NULL, 1, NULL);

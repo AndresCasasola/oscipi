@@ -52,13 +52,23 @@ class SerialPicoSource(DataSource):
     def run(self):
         try:
             with serial.Serial(self.port, BAUDRATE, timeout=1) as ser:
+                # IMPORTANT: Raspberry Pi Pico USB CDC requires DTR to be asserted to send data
+                ser.setDTR(True)
+                ser.setRTS(True)
+                print(f"--- UART CONNECTED TO {self.port} at {BAUDRATE} bps ---")
+                
+                frames_received = 0
+                
                 while self.running:
                     # Search for sync header 0xAA 0x55
-                    if ser.read(1) == b'\xaa':
-                        if ser.read(1) == b'\x55':
+                    byte1 = ser.read(1)
+                    if byte1 == b'\xaa':
+                        byte2 = ser.read(1)
+                        if byte2 == b'\x55':
                             # Read metadata: ID (4) + Timestamp (4) + Flags (1) + Pad (1) = 10 bytes
                             metadata = ser.read(10) 
                             if len(metadata) < 10:
+                                print("Warning: Incomplete metadata received.")
                                 continue
                             
                             seq_id, timestamp, flags, pad = struct.unpack('<IIBB', metadata)
@@ -66,11 +76,13 @@ class SerialPicoSource(DataSource):
                             # Read 1024 samples (2 bytes each = 2048 bytes)
                             raw_payload = ser.read(SAMPLES_PER_BUFFER * 2)
                             if len(raw_payload) < SAMPLES_PER_BUFFER * 2:
+                                print(f"Warning: Incomplete payload received for frame {seq_id}.")
                                 continue
                                 
                             # Read checksum (2 bytes)
                             crc_bytes = ser.read(2)
                             if len(crc_bytes) < 2:
+                                print(f"Warning: Missing CRC bytes for frame {seq_id}.")
                                 continue
                             
                             expected_crc = struct.unpack('<H', crc_bytes)[0]
@@ -93,6 +105,10 @@ class SerialPicoSource(DataSource):
                                     print(f"Warning: Gap detected (Firmware dropped a frame) at sequence {seq_id}")
                                 
                                 self.new_data_signal.emit(samples)
+                                
+                                frames_received += 1
+                                if frames_received == 1:
+                                    print("--- FIRST VALID FRAME RECEIVED SUCCESSFULLY! ---")
                             else:
                                 print(f"CRC Error! Drop frame {seq_id}. Expected: {expected_crc}, Calc: {calc_crc}")
         except Exception as e:
