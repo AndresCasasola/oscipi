@@ -26,6 +26,9 @@ pico_sdk_init()
 # Add executable and main source file
 add_executable(oscipi
     src/main.c
+    src/osc_dma.c
+    src/osc_processing.c
+    src/osc_comm.c
 )
 
 # Enable USB output for stdio (printf via USB)
@@ -35,6 +38,8 @@ pico_enable_stdio_usb(oscipi 1)
 target_link_libraries(oscipi 
     pico_stdlib
     FreeRTOS-Kernel-Heap4
+    hardware_adc
+    hardware_dma
 )
 
 # Tell FreeRTOS where the FreeRTOSConfig.h file is located

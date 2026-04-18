@@ -1,7 +1,11 @@
 #include <stdio.h>
+#include "osc_dma.h"
+#include "osc_processing.h"
+#include "osc_comm.h"
 
 #ifndef UNIT_TEST
     #include "pico/stdlib.h"
+    #include "pico/stdio_usb.h"
     #include "FreeRTOS.h"
     #include "task.h"
 #else
@@ -43,10 +47,10 @@ void vBlinkTask(void *pvParameters) {
 
     while (true) {
         led_set_state(true);
-        vTaskDelay(pdMS_TO_TICKS(300)); 
+        vTaskDelay(pdMS_TO_TICKS(500)); 
 
         led_set_state(false);
-        vTaskDelay(pdMS_TO_TICKS(300));
+        vTaskDelay(pdMS_TO_TICKS(500));
     }
 }
 
@@ -54,7 +58,20 @@ void vBlinkTask(void *pvParameters) {
 #ifndef UNIT_TEST
 int main() {
     stdio_init_all();
+    
+    // Disable \n translation to \r\n for binary data over USB CDC
+    stdio_set_translate_crlf(&stdio_usb, false);
+
+    // Initialize Architecture Components
+    osc_dma_init();
+    osc_processing_init();
+
+    // Create FreeRTOS Tasks
+    // Highest priority for processing, lower for comm, lowest for blink
+    xTaskCreate(vDataProcessingTask, "Process_Task", 1024, NULL, 3, NULL);
+    xTaskCreate(vCommDriverTask, "Comm_Task", 1024, NULL, 2, NULL);
     xTaskCreate(vBlinkTask, "Blink_Task", 256, NULL, 1, NULL);
+    
     vTaskStartScheduler();
     while (true) {
         tight_loop_contents();
