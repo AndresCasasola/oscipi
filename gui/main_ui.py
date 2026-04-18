@@ -175,6 +175,12 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         else:
             self.statusBar().showMessage("DISCONNECTED - Please select a COM port and connect.")
 
+        # 7. Smooth Animation Timer (Real-time Sensation Algorithm)
+        self.sample_queue = np.array([], dtype=np.uint16)
+        self.anim_timer = QtCore.QTimer()
+        self.anim_timer.timeout.connect(self.animate_plot)
+        self.anim_timer.start(16) # ~60 FPS (16ms)
+
     def refresh_ports(self):
         """Scans for available serial ports and populates the dropdown"""
         self.port_combo.clear()
@@ -194,6 +200,7 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
             self.port_combo.setEnabled(True)
             self.refresh_btn.setEnabled(True)
             self.statusBar().showMessage("DISCONNECTED")
+            self.sample_queue = np.array([], dtype=np.uint16) # Clear queue
         else:
             # Start the connection
             if self.port_combo.count() == 0:
@@ -219,12 +226,33 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         self.statusBar().showMessage("SIMULATION MODE ACTIVE (No Hardware)")
 
     def update_plot(self, new_samples):
-        """Updates the plot with the new data block"""
-        # Shift the buffer to the left and append the new data at the end
-        self.display_buffer = np.roll(self.display_buffer, -SAMPLES_PER_BUFFER)
-        self.display_buffer[-SAMPLES_PER_BUFFER:] = new_samples
+        """Receives new large blocks of data (1 per second) and queues them for smooth animation"""
+        self.sample_queue = np.append(self.sample_queue, new_samples)
+
+    def animate_plot(self):
+        """Runs at 60FPS to slowly feed the queued samples into the graph, creating a real-time feel"""
+        q_len = len(self.sample_queue)
+        if q_len == 0:
+            return
+            
+        # Target: 1000 samples per second. At 60 FPS, that's ~16.6 samples per frame.
+        chunk_size = 17 
         
-        # Update curve data in the UI
+        # Self-correction: if the queue gets too big (PC lagged), consume faster to catch up
+        if q_len > SAMPLES_PER_BUFFER * 2:
+            chunk_size = q_len // 10 
+
+        chunk_size = min(chunk_size, q_len)
+        
+        # Pop the chunk from the queue
+        chunk = self.sample_queue[:chunk_size]
+        self.sample_queue = self.sample_queue[chunk_size:]
+        
+        # Shift the display buffer to the left and append the new tiny chunk
+        self.display_buffer = np.roll(self.display_buffer, -chunk_size)
+        self.display_buffer[-chunk_size:] = chunk
+        
+        # Update curve data in the UI for a buttery smooth visual
         self.curve.setData(self.display_buffer)
 
     def closeEvent(self, event):
