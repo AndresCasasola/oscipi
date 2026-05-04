@@ -1,5 +1,5 @@
 #include <stdio.h>
-#include "pico/stdlib.h"
+#include "pico/stdlib.h" // IWYU pragma: keep
 #include "hardware/adc.h"
 #include "osc_types.h"
 
