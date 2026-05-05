@@ -48,53 +48,69 @@ class MockPicoSource(DataSource):
             time.sleep(0.02) # ~50 FPS for total smoothness
 
 class SerialPicoSource(DataSource):
-    """Real Driver: Reads the framing protocol defined for the bunker"""
+    """Real Driver: Reads the framing protocol and monitors transfer performance"""
     def run(self):
+        # Performance monitoring variables
+        bytes_received_total = 0
+        frames_received_total = 0
+        start_perf_time = time.time()
+        
         try:
             with serial.Serial(self.port, BAUDRATE, timeout=1) as ser:
+                ser.setDTR(True)
+                ser.setRTS(True)
+                print(f"--- UART CONNECTED TO {self.port} at {BAUDRATE} bps ---")
+                
                 while self.running:
-                    # Search for sync header 0xAA 0x55
-                    if ser.read(1) == b'\xaa':
-                        if ser.read(1) == b'\x55':
-                            # Read metadata: ID (4) + Timestamp (4) + Flags (1) + Pad (1) = 10 bytes
+                    byte1 = ser.read(1)
+                    if byte1 == b'\xaa':
+                        byte2 = ser.read(1)
+                        if byte2 == b'\x55':
+                            # 1. Read metadata (10 bytes)
                             metadata = ser.read(10) 
-                            if len(metadata) < 10:
-                                continue
+                            if len(metadata) < 10: continue
                             
                             seq_id, timestamp, flags, pad = struct.unpack('<IIBB', metadata)
                             
-                            # Read 1024 samples (2 bytes each = 2048 bytes)
+                            # 2. Read samples (2048 bytes)
                             raw_payload = ser.read(SAMPLES_PER_BUFFER * 2)
-                            if len(raw_payload) < SAMPLES_PER_BUFFER * 2:
-                                continue
+                            if len(raw_payload) < SAMPLES_PER_BUFFER * 2: continue
                                 
-                            # Read checksum (2 bytes)
+                            # 3. Read checksum (2 bytes)
                             crc_bytes = ser.read(2)
-                            if len(crc_bytes) < 2:
-                                continue
+                            if len(crc_bytes) < 2: continue
                             
                             expected_crc = struct.unpack('<H', crc_bytes)[0]
                             
-                            # Ultra-fast bytes to NumPy conversion (16-bit unsigned)
+                            # 4. Process and Emit
                             samples = np.frombuffer(raw_payload, dtype='<H')
-                            
-                            # Fast XOR Checksum calculation using NumPy
                             meta_words = np.frombuffer(metadata, dtype='<H')
-                            calc_crc = np.bitwise_xor.reduce(meta_words) ^ np.bitwise_xor.reduce(samples)
-                            
-                            # Convert to native integer to avoid numpy type issues
-                            calc_crc = int(calc_crc) 
+                            calc_crc = int(np.bitwise_xor.reduce(meta_words) ^ np.bitwise_xor.reduce(samples))
                             
                             if calc_crc == expected_crc:
-                                # If overflow is reported by the Pico
-                                if flags & 0x01:
-                                    print(f"Warning: Hardware Overflow detected at sequence {seq_id}")
-                                if flags & 0x02:
-                                    print(f"Warning: Gap detected (Firmware dropped a frame) at sequence {seq_id}")
-                                
                                 self.new_data_signal.emit(samples)
+                                bytes_received_total += (14 + SAMPLES_PER_BUFFER * 2)
+                                frames_received_total += 1
+                                
+                                if frames_received_total == 1:
+                                    print("--- FIRST VALID FRAME RECEIVED SUCCESSFULLY! ---")
                             else:
-                                print(f"CRC Error! Drop frame {seq_id}. Expected: {expected_crc}, Calc: {calc_crc}")
+                                print(f"CRC Error! Frame {seq_id}")
+
+                    # --- Performance Reporting ---
+                    current_time = time.time()
+                    if current_time - start_perf_time >= 1.0:
+                        elapsed = current_time - start_perf_time
+                        kbps = (bytes_received_total / 1024) / elapsed
+                        fps = frames_received_total / elapsed
+                        
+                        # Monitor simple de consola (sin acceder a la cola para evitar el error)
+                        print(f"| [THROUGHPUT] {kbps:>7.2f} KB/s | [FPS] {fps:>5.1f} frames/s |")
+                        
+                        bytes_received_total = 0
+                        frames_received_total = 0
+                        start_perf_time = current_time
+
         except Exception as e:
             print(f"CRITICAL UART ERROR: {e}")
 
@@ -159,6 +175,12 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         else:
             self.statusBar().showMessage("DISCONNECTED - Please select a COM port and connect.")
 
+        # 7. Smooth Animation Timer (Real-time Sensation Algorithm)
+        self.sample_queue = np.array([], dtype=np.uint16)
+        self.anim_timer = QtCore.QTimer()
+        self.anim_timer.timeout.connect(self.animate_plot)
+        self.anim_timer.start(16) # ~60 FPS (16ms)
+
     def refresh_ports(self):
         """Scans for available serial ports and populates the dropdown"""
         self.port_combo.clear()
@@ -178,6 +200,7 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
             self.port_combo.setEnabled(True)
             self.refresh_btn.setEnabled(True)
             self.statusBar().showMessage("DISCONNECTED")
+            self.sample_queue = np.array([], dtype=np.uint16) # Clear queue
         else:
             # Start the connection
             if self.port_combo.count() == 0:
@@ -203,12 +226,33 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         self.statusBar().showMessage("SIMULATION MODE ACTIVE (No Hardware)")
 
     def update_plot(self, new_samples):
-        """Updates the plot with the new data block"""
-        # Shift the buffer to the left and append the new data at the end
-        self.display_buffer = np.roll(self.display_buffer, -SAMPLES_PER_BUFFER)
-        self.display_buffer[-SAMPLES_PER_BUFFER:] = new_samples
+        """Receives new large blocks of data (1 per second) and queues them for smooth animation"""
+        self.sample_queue = np.append(self.sample_queue, new_samples)
+
+    def animate_plot(self):
+        """Runs at 60FPS to slowly feed the queued samples into the graph, creating a real-time feel"""
+        q_len = len(self.sample_queue)
+        if q_len == 0:
+            return
+            
+        # Target: 1000 samples per second. At 60 FPS, that's ~16.6 samples per frame.
+        chunk_size = 17 
         
-        # Update curve data in the UI
+        # Self-correction: if the queue gets too big (PC lagged), consume faster to catch up
+        if q_len > SAMPLES_PER_BUFFER * 2:
+            chunk_size = q_len // 10 
+
+        chunk_size = min(chunk_size, q_len)
+        
+        # Pop the chunk from the queue
+        chunk = self.sample_queue[:chunk_size]
+        self.sample_queue = self.sample_queue[chunk_size:]
+        
+        # Shift the display buffer to the left and append the new tiny chunk
+        self.display_buffer = np.roll(self.display_buffer, -chunk_size)
+        self.display_buffer[-chunk_size:] = chunk
+        
+        # Update curve data in the UI for a buttery smooth visual
         self.curve.setData(self.display_buffer)
 
     def closeEvent(self, event):

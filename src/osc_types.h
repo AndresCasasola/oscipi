@@ -5,7 +5,6 @@
 #include <stdbool.h>
 
 #define SAMPLES_PER_BUFFER 1024
-#define POOL_SIZE 8
 
 // Error flags
 #define FLAG_OVERFLOW 0x01

@@ -26,9 +26,6 @@ pico_sdk_init()
 # Add executable and main source file
 add_executable(oscipi
     src/main.c
-    src/osc_dma.c
-    src/osc_processing.c
-    src/osc_comm.c
 )
 
 # Enable USB output for stdio (printf via USB)
