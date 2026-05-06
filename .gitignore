@@ -2,6 +2,7 @@
 build/
 run_tests.exe
 .pico-sdk/
+docs/devcrumbs/
 
 # Archivos temporales de VS Code
 .vscode/

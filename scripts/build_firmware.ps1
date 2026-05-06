@@ -1,5 +1,6 @@
 # build_firmware.ps1 - Agnostic Firmware Build Runner
 param (
+    [Alias("f", "Force")]
     [switch]$Clean
 )
 
