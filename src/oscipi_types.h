@@ -1,5 +1,5 @@
-#ifndef OSC_TYPES_H
-#define OSC_TYPES_H
+#ifndef OSCIPI_TYPES_H
+#define OSCIPI_TYPES_H
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -20,4 +20,4 @@ typedef struct {
     uint16_t samples[SAMPLES_PER_BUFFER];
 } adc_buffer_t;
 
-#endif // OSC_TYPES_H
+#endif // OSCIPI_TYPES_H
