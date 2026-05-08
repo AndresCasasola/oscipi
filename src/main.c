@@ -1,3 +1,4 @@
+#include <pico/time.h>
 #include <stdio.h> // IWYU pragma: keep
 #include <math.h>
 
