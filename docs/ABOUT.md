@@ -1,25 +1,29 @@
 # Oscipi
 
-**Oscipi** es una aplicación diseñada para transformar una Raspberry Pi Pico en un **osciloscopio digital profesional**. Es la herramienta ideal para ingenieros, makers y estudiantes que necesitan visualizar señales eléctricas en tiempo real con una precisión y fluidez que las soluciones básicas no pueden ofrecer.
+**Oscipi** is an application designed to transform a Raspberry Pi Pico into a **professional digital oscilloscope**. It is the ideal tool for engineers, makers, and students who need to visualize electrical signals in real-time with a level of precision and fluidity that entry-level solutions simply cannot provide.
 
-## ¿Qué es Oscipi?
-En esencia, es un sistema de "escucha" de alta velocidad. Mientras que un multímetro te da un número estático (ej. 3.3V), **Oscipi** te permite ver la "película" de esa electricidad: cómo sube, cómo baja, si tiene ruido o si se comporta como debería.
+## What is Oscipi?
 
-Lo que hace único a Oscipi es su **arquitectura blindada**. Ha sido diseñado para que el hardware trabaje de forma autónoma, asegurando que no se pierda ni un solo detalle de la señal, incluso cuando el ordenador está ocupado procesando los datos.
+At its core, it is a high-speed "listening" system. While a multimeter gives you a static number (e.g., 3.3V), **Oscipi** allows you to see the "movie" of that electricity: how it rises, how it falls, whether it has noise, or if it is behaving as it should.
 
-## ¿Para qué sirve?
-*   **Depuración de Circuitos:** Averigua por qué un sensor no funciona o si una señal de comunicación tiene interferencias.
-*   **Aprendizaje de Electrónica:** Visualiza ondas senoidales, cuadradas y PWM para entender cómo funciona la teoría en la vida real.
-*   **Análisis de Señales:** Mide tiempos exactos, frecuencias y voltajes con una interfaz visual intuitiva en tu ordenador.
-*   **Prototipado de Bajo Coste:** Obtén capacidades de visualización profesional usando hardware de apenas 5 euros.
+What makes Oscipi unique is its **hardened architecture**. It has been designed so the hardware works autonomously, ensuring that not a single detail of the signal is lost—even when the computer is busy processing the data.
 
-## Características Principales
-*   **Visualización Fluida:** Una interfaz en Python optimizada para mostrar miles de datos por segundo sin tirones.
-*   **Muestreo Ininterrumpido:** Gracias a su diseño inteligente, el dispositivo nunca "pestañea"; captura la señal de forma continua y sin huecos.
-*   **Diseño Robusto:** Inspirado en sistemas críticos, el software detecta automáticamente si hay saturación o errores de datos para avisarte de inmediato.
-*   **Modo Simulación:** ¿No tienes la placa a mano? Incluye un generador de señales virtual para que puedas probar la interfaz y tus herramientas de análisis en cualquier lugar.
+## What is it for?
 
-## Cómo funciona (En un vistazo)
-1.  **Captura:** La Raspberry Pi Pico recoge la señal eléctrica a gran velocidad.
-2.  **Transporte:** Los datos viajan por USB hacia tu ordenador mediante una "tubería" optimizada.
-3.  **Visualización:** La aplicación de escritorio traduce esos números en una gráfica verde brillante, permitiéndote analizar la señal con comodidad.
+* **Circuit Debugging:** Find out why a sensor isn't working or if a communication signal has interference.
+* **Electronics Learning:** Visualize sine, square, and PWM waves to understand how theory works in real life.
+* **Signal Analysis:** Measure exact timings, frequencies, and voltages with an intuitive visual interface on your computer.
+* **Low-Cost Prototyping:** Gain professional visualization capabilities using hardware that costs barely 5 euros.
+
+## Key Features
+
+* **Fluid Visualization:** A Python interface optimized to display thousands of data points per second without stuttering.
+* **Uninterrupted Sampling:** Thanks to its intelligent design, the device never "blinks"; it captures the signal continuously and without gaps.
+* **Robust Design:** Inspired by mission-critical systems, the software automatically detects data saturation or errors to alert you immediately.
+* **Simulation Mode:** Don't have the board handy? It includes a virtual signal generator so you can test the interface and your analysis tools anywhere.
+
+## How it works (At a glance)
+
+1. **Capture:** The Raspberry Pi Pico collects the electrical signal at high speed.
+2. **Transport:** The data travels via USB to your computer through an optimized "pipeline."
+3. **Visualization:** The desktop application translates those numbers into a bright green graph, allowing you to analyze the signal comfortably.
