@@ -1,4 +1,4 @@
-# Pico-OS Graphical User Interface
+# Oscipi Graphical User Interface
 
 The GUI is a PyQt5-based application designed to visualize high-speed ADC data streamed from the Raspberry Pi Pico oscilloscope firmware (or the hardware emulator). 
 
