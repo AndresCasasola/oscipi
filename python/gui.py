@@ -2,16 +2,18 @@ import sys
 import time
 import struct
 import numpy as np
+import socket
 import serial
 import serial.tools.list_ports
 from PyQt5 import QtWidgets, QtCore
 import pyqtgraph as pg
+from theme import get_stylesheet
 
 # --- GLOBAL BUNKER CONFIGURATION ---
 SIMULATE_MODE = False  # Change to False to connect to the real Pico
 BAUDRATE = 921600
 SAMPLES_PER_BUFFER = 1024
-DISPLAY_CHUNKS = 5     # How many buffers we want to see on screen at once
+DISPLAY_CHUNKS = 50     # How many buffers we want to see on screen at once (50 = 1 full second at 50FPS)
 ADC_MAX_VAL = 4095     # 12-bit resolution of the Pico
 
 # --- DATA LAYER (MODULARIZED) ---
@@ -47,19 +49,57 @@ class MockPicoSource(DataSource):
             phase += 0.1 # Wave movement speed
             time.sleep(0.02) # ~50 FPS for total smoothness
 
+class TCPSerialWrapper:
+    """Mocks a pyserial Serial object but uses a TCP socket internally."""
+    def __init__(self, port_str, timeout=1):
+        # Expects "tcp:host:port"
+        parts = port_str.split(":")
+        host = parts[1]
+        port = int(parts[2])
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.settimeout(timeout)
+        self.sock.connect((host, port))
+        
+    def setDTR(self, val): pass
+    def setRTS(self, val): pass
+    
+    def read(self, size=1):
+        try:
+            data = b''
+            while len(data) < size:
+                chunk = self.sock.recv(size - len(data))
+                if not chunk:
+                    break
+                data += chunk
+            return data
+        except socket.timeout:
+            return b''
+
+    def close(self):
+        self.sock.close()
+        
+    def __enter__(self): return self
+    def __exit__(self, exc_type, exc_val, exc_tb): self.close()
+
 class SerialPicoSource(DataSource):
     """Real Driver: Reads the framing protocol and monitors transfer performance"""
     def run(self):
         # Performance monitoring variables
         bytes_received_total = 0
         frames_received_total = 0
+        first_frame_seen = False
         start_perf_time = time.time()
         
         try:
-            with serial.Serial(self.port, BAUDRATE, timeout=1) as ser:
+            if self.port.startswith("tcp:"):
+                context = TCPSerialWrapper(self.port, timeout=1)
+            else:
+                context = serial.Serial(self.port, BAUDRATE, timeout=1)
+
+            with context as ser:
                 ser.setDTR(True)
                 ser.setRTS(True)
-                print(f"--- UART CONNECTED TO {self.port} at {BAUDRATE} bps ---")
+                print(f"--- CONNECTED TO {self.port} ---")
                 
                 while self.running:
                     byte1 = ser.read(1)
@@ -92,8 +132,9 @@ class SerialPicoSource(DataSource):
                                 bytes_received_total += (14 + SAMPLES_PER_BUFFER * 2)
                                 frames_received_total += 1
                                 
-                                if frames_received_total == 1:
+                                if not first_frame_seen:
                                     print("--- FIRST VALID FRAME RECEIVED SUCCESSFULLY! ---")
+                                    first_frame_seen = True
                             else:
                                 print(f"CRC Error! Frame {seq_id}")
 
@@ -123,7 +164,7 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         # 1. Window Configuration
         self.setWindowTitle("Pico-OS | Professional Real-Time Oscilloscope")
         self.resize(1100, 700)
-        self.setStyleSheet("background-color: #121212; color: #E0E0E0;")
+        self.setStyleSheet(get_stylesheet())
 
         # 2. Main Layout
         self.central_widget = QtWidgets.QWidget()
@@ -143,20 +184,49 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         self.connect_btn = QtWidgets.QPushButton("Connect")
         self.connect_btn.clicked.connect(self.toggle_connection)
         
+        self.voltage_spin = QtWidgets.QDoubleSpinBox()
+        self.voltage_spin.setRange(0.1, 100.0)
+        self.voltage_spin.setValue(3.3)
+        self.voltage_spin.setSingleStep(0.1)
+        self.voltage_spin.setSuffix(" V")
+        self.voltage_spin.valueChanged.connect(self.update_y_range)
+        
+        self.timebase_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.timebase_slider.setMinimum(100)
+        self.timebase_slider.setMaximum(SAMPLES_PER_BUFFER * DISPLAY_CHUNKS)
+        # Default to a medium zoom (e.g., 5 chunks = 5120 samples) so it's not too squished on startup
+        self.timebase_slider.setValue(SAMPLES_PER_BUFFER * 5)
+        self.timebase_slider.setMinimumWidth(250)
+        self.timebase_slider.valueChanged.connect(self.update_timebase)
+        
         self.control_layout.addWidget(QtWidgets.QLabel("COM Port:"))
         self.control_layout.addWidget(self.port_combo)
         self.control_layout.addWidget(self.refresh_btn)
         self.control_layout.addWidget(self.connect_btn)
+        
+        self.control_layout.addSpacing(20)
+        self.control_layout.addWidget(QtWidgets.QLabel("ADC Range:"))
+        self.control_layout.addWidget(self.voltage_spin)
+        
+        # Add some spacing before time scale
+        self.control_layout.addSpacing(20)
+        self.control_layout.addWidget(QtWidgets.QLabel("Time Scale (Zoom):"))
+        self.control_layout.addWidget(self.timebase_slider)
+        
         self.control_layout.addStretch()
         
         self.main_layout.addLayout(self.control_layout)
 
         # 4. Plot Widget
-        self.plot_widget = pg.PlotWidget(title="ADC Signal Stream")
-        self.plot_widget.setYRange(0, ADC_MAX_VAL)
+        self.plot_widget = pg.PlotWidget(title="Real-Time Signal Stream")
         self.plot_widget.showGrid(x=True, y=True, alpha=0.2)
-        self.plot_widget.getAxis('left').setLabel('Amplitude', units='ADC Units')
+        self.plot_widget.getAxis('left').setLabel('Amplitude', units='V')
         self.plot_widget.getAxis('bottom').setLabel('Samples')
+        self.update_y_range()
+        
+        # Disable auto-range on X to allow manual zooming, but keep Y fixed
+        self.plot_widget.setMouseEnabled(x=False, y=False) 
+        self.update_timebase(self.timebase_slider.value())
         
         # Curve style (Classic oscilloscope bright green)
         self.curve = self.plot_widget.plot(pen=pg.mkPen(color='#39FF14', width=1.5))
@@ -175,11 +245,16 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         else:
             self.statusBar().showMessage("DISCONNECTED - Please select a COM port and connect.")
 
-        # 7. Smooth Animation Timer (Real-time Sensation Algorithm)
-        self.sample_queue = np.array([], dtype=np.uint16)
-        self.anim_timer = QtCore.QTimer()
-        self.anim_timer.timeout.connect(self.animate_plot)
-        self.anim_timer.start(16) # ~60 FPS (16ms)
+    def update_timebase(self, value):
+        """Updates the X-axis range to zoom into the latest samples on the right side of the screen."""
+        max_idx = SAMPLES_PER_BUFFER * DISPLAY_CHUNKS
+        # Zoom into the newest data at the end of the buffer
+        self.plot_widget.setXRange(max_idx - value, max_idx, padding=0)
+
+    def update_y_range(self):
+        """Updates the Y-axis range based on the configured ADC max voltage."""
+        v_max = self.voltage_spin.value()
+        self.plot_widget.setYRange(0, v_max)
 
     def refresh_ports(self):
         """Scans for available serial ports and populates the dropdown"""
@@ -188,6 +263,7 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         for p in ports:
             # Add item with a descriptive name, but store the actual device path (e.g. 'COM3') as the item data
             self.port_combo.addItem(f"{p.device} - {p.description}", p.device)
+        self.port_combo.addItem("TCP Localhost:5555 (Emulator)", "tcp:127.0.0.1:5555")
 
     def toggle_connection(self):
         """Connects or disconnects the serial data source"""
@@ -200,7 +276,6 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
             self.port_combo.setEnabled(True)
             self.refresh_btn.setEnabled(True)
             self.statusBar().showMessage("DISCONNECTED")
-            self.sample_queue = np.array([], dtype=np.uint16) # Clear queue
         else:
             # Start the connection
             if self.port_combo.count() == 0:
@@ -226,34 +301,17 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         self.statusBar().showMessage("SIMULATION MODE ACTIVE (No Hardware)")
 
     def update_plot(self, new_samples):
-        """Receives new large blocks of data (1 per second) and queues them for smooth animation"""
-        self.sample_queue = np.append(self.sample_queue, new_samples)
-
-    def animate_plot(self):
-        """Runs at 60FPS to slowly feed the queued samples into the graph, creating a real-time feel"""
-        q_len = len(self.sample_queue)
-        if q_len == 0:
-            return
-            
-        # Target: 1000 samples per second. At 60 FPS, that's ~16.6 samples per frame.
-        chunk_size = 17 
+        """Immediately renders the new hardware frame to screen for zero-latency plotting."""
+        # Shift the display buffer to the left and append the new 1024 samples
+        self.display_buffer = np.roll(self.display_buffer, -SAMPLES_PER_BUFFER)
+        self.display_buffer[-SAMPLES_PER_BUFFER:] = new_samples
         
-        # Self-correction: if the queue gets too big (PC lagged), consume faster to catch up
-        if q_len > SAMPLES_PER_BUFFER * 2:
-            chunk_size = q_len // 10 
-
-        chunk_size = min(chunk_size, q_len)
+        # Convert raw ADC values to Voltage
+        v_max = self.voltage_spin.value()
+        voltage_data = (self.display_buffer / ADC_MAX_VAL) * v_max
         
-        # Pop the chunk from the queue
-        chunk = self.sample_queue[:chunk_size]
-        self.sample_queue = self.sample_queue[chunk_size:]
-        
-        # Shift the display buffer to the left and append the new tiny chunk
-        self.display_buffer = np.roll(self.display_buffer, -chunk_size)
-        self.display_buffer[-chunk_size:] = chunk
-        
-        # Update curve data in the UI for a buttery smooth visual
-        self.curve.setData(self.display_buffer)
+        # Update curve data in the UI
+        self.curve.setData(voltage_data)
 
     def closeEvent(self, event):
         """Ensure clean thread shutdown when closing the window"""
