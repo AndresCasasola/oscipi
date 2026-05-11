@@ -34,6 +34,29 @@ This was the initial proof of concept. The CPU handled the entire signal chain: 
 
 The main limitation was the high Jitter and "Phase Jumps." Timing was artificial and inconsistent because it relied on CPU cycles. The system was 100% blocked during data transmission. The next step required moving timing responsibility to the hardware.
 
+
+
+<details>
+<summary><b>v0.1.1: Feat: Python/Qt GUI Foundation</b></summary>
+
+Description
+
+This version establishes the desktop software counterpart to the hardware. A robust, high-performance Graphical User Interface built with PyQt5 and pyqtgraph to visualize the data streams coming from the RP2040. It also introduces a "Packet Inspector" for advanced debugging and hardware emulation capabilities for testing without the physical MCU.
+
+#### Features
+
+* **High-Speed Real-Time Plotting**: Using `pyqtgraph` and numpy to render signals at 60 FPS without UI freezes.
+* **Hardware Emulator (`hw_emulator.py`)**: A standalone virtual signal generator (Sine, Square, Triangle, Noise) that outputs data via a TCP socket mimicking the MCU's framing protocol.
+* **Packet Inspector**: A dedicated auditing tab implementing a massive, pre-allocated Circular Buffer capable of holding gigabytes of packet history in RAM. Uses `QAbstractTableModel` for ultra-fast scrolling and searching.
+* **Custom Styling**: A fully customized "Dark/Neon" aesthetic using CSS-like Qt stylesheets for a professional lab tool feel.
+* **Resilient Connection Handling**: Auto-recovery and clear error reporting when UART connections drop or fail.
+
+#### Limitations & Upgrade Path
+
+Currently, the UI is purely a passive listener (it receives data and visualizes it). The next major UI step (matching hardware v0.6) will be implementing a bidirectional command system to actively control the hardware parameters (trigger levels, frequency, channels) directly from the GUI.
+
+</details>
+
 ---
 
 ### v0.2: Feat: DMA (Single Buffer)

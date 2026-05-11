@@ -3,7 +3,8 @@ import time
 import struct
 import socket
 import numpy as np
-from PyQt5 import QtWidgets, QtCore
+import os
+from PyQt5 import QtWidgets, QtCore, QtGui
 from theme import get_stylesheet
 
 BAUDRATE = 921600
@@ -24,7 +25,7 @@ class EmulatorWorker(QtCore.QThread):
         self.waveform = "Sine" # "Sine", "Square", "Triangle", "Noise"
         self.amplitude = 1500
         self.offset = 2048
-        self.noise_level = 15
+        self.noise_level = 0
         self.speed = 0.1
         self.frequency = 1.0
         self.fps = 50.0
@@ -122,7 +123,13 @@ class EmulatorWorker(QtCore.QThread):
 class EmulatorUI(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Pico-OS | Virtual Signal Generator")
+        self.setWindowTitle("Oscipi | Virtual Signal Generator")
+        
+        # Set Window Icon
+        icon_path = os.path.join(os.path.dirname(__file__), 'assets', 'generator_icon.png')
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QtGui.QIcon(icon_path))
+            
         self.resize(850, 350)
         self.setStyleSheet(get_stylesheet())
 
@@ -187,7 +194,8 @@ class EmulatorUI(QtWidgets.QMainWindow):
 
         # Frequency Knob
         self.freq_mult = QtWidgets.QComboBox()
-        self.freq_mult.addItems(["x1 (Cycles)", "x10", "x100", "kHz (True Hz)", "MHz"])
+        self.freq_mult.setItemDelegate(QtWidgets.QStyledItemDelegate())
+        self.freq_mult.addItems(["x1 (Cycles)", "x10", "x100", "Hz (True Hz)", "kHz", "MHz"])
         self.freq_mult.currentIndexChanged.connect(self.update_params)
         
         self.freq_slider, freq_widget = self.create_knob_widget("Frequency", 1, 999, 1, self.update_params, mult_combo=self.freq_mult)
@@ -202,7 +210,7 @@ class EmulatorUI(QtWidgets.QMainWindow):
         knobs_layout.addWidget(off_widget)
 
         # Noise Knob
-        self.noise_slider, noise_widget = self.create_knob_widget("Noise Level", 0, 500, 15, self.update_params)
+        self.noise_slider, noise_widget = self.create_knob_widget("Noise Level", 0, 500, 0, self.update_params)
         knobs_layout.addWidget(noise_widget)
 
         # Speed Knob
@@ -290,6 +298,8 @@ class EmulatorUI(QtWidgets.QMainWindow):
             f = val * 10
         elif mult == "x100":
             f = val * 100
+        elif mult.startswith("Hz"):
+            f = val * 0.002048
         elif mult.startswith("kHz"):
             # Assume 500kS/s sample rate and 1024 samples/buffer -> 1 buffer = 2.048ms
             # 1 Hz = 0.002048 cycles/buffer
@@ -327,6 +337,11 @@ class EmulatorUI(QtWidgets.QMainWindow):
         event.accept()
 
 if __name__ == "__main__":
+    import ctypes
+    # Tell Windows to treat this process as a standalone app, so it gets its own taskbar icon
+    myappid = 'casasola.oscipi.generator.1'
+    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+
     app = QtWidgets.QApplication(sys.argv)
     app.setStyle("Fusion")
     win = EmulatorUI()

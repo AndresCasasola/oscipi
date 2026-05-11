@@ -56,21 +56,23 @@ def get_stylesheet():
             width: 20px;
         }
         
-        QComboBox QAbstractItemView {
+        QComboBox QListView {
             background-color: #2d2d2d;
+            alternate-background-color: #2d2d2d;
             color: white;
             border: none;
             selection-background-color: #0d6efd;
             outline: 0px;
         }
         
-        QComboBox QAbstractItemView::item {
+        QComboBox QListView::item {
             min-height: 30px;
             border: none;
             padding: 5px;
+            background-color: #2d2d2d;
         }
         
-        QComboBox QAbstractItemView::item:selected {
+        QComboBox QListView::item:selected {
             background-color: #0d6efd;
             color: white;
             border: none;
