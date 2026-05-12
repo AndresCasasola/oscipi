@@ -213,25 +213,42 @@ class PacketTableModel(QtCore.QAbstractTableModel):
         self.headers = ["Index", "Seq ID", "Time (us)", "Flags", "CRC"]
 
     def rowCount(self, parent=QtCore.QModelIndex()):
-        return self.ui.hist_count
+        if self.ui.hist_count == 0: return 0
+        return self.ui.hist_count + 1 # +1 for AVERAGE row at index 0
 
     def columnCount(self, parent=QtCore.QModelIndex()):
         return len(self.headers)
         
     def data(self, index, role=QtCore.Qt.DisplayRole):
         if not index.isValid(): return None
+        row = index.row()
+        col = index.column()
+
+        if role == QtCore.Qt.BackgroundRole:
+            if row == 0:
+                return QtGui.QColor("#0d1a2a") # Dark blue for average row
+            return None
+
+        if role == QtCore.Qt.ForegroundRole:
+            if row == 0:
+                return QtGui.QColor("#3D8EFF") # Bright blue text
+            return None
+
         if role == QtCore.Qt.DisplayRole:
-            row = index.row()
-            col = index.column()
+            if row == 0:
+                if col == 0: return "\u03A3" # Sigma
+                if col == 1: return "HISTORY AVERAGE"
+                if col == 2: return f"{self.ui.hist_count} pkts"
+                return "-"
             
-            # Map logical row to circular buffer physical index.
-            # Logical row 0 is the oldest packet currently in buffer.
+            # Normal rows (offset by 1)
+            row_idx = row - 1
             if self.ui.hist_count < self.ui.max_packets:
-                phys_idx = row
+                phys_idx = row_idx
             else:
-                phys_idx = (self.ui.hist_head + row) % self.ui.max_packets
+                phys_idx = (self.ui.hist_head + row_idx) % self.ui.max_packets
                 
-            if col == 0: return str(row)
+            if col == 0: return str(row_idx)
             if col == 1: return str(self.ui.hist_seq[phys_idx])
             if col == 2: return str(self.ui.hist_time[phys_idx])
             if col == 3: return f"0x{self.ui.hist_flags[phys_idx]:02X}"
@@ -502,6 +519,7 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         tel_layout.addWidget(self.tel_bar_plot)
 
         detail_tabs.addTab(tel_tab, "Telemetry")
+        detail_tabs.setCurrentIndex(1) # Telemetry is more important for analysis by default
 
         splitter.addWidget(detail_tabs)
         splitter.setSizes([400, 600])
@@ -554,14 +572,14 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         self.refresh_ports()
         conn_layout.addWidget(self.port_combo)
 
-        self.refresh_btn = QtWidgets.QPushButton("\u27F3  Refresh")
+        self.refresh_btn = QtWidgets.QPushButton("\u21BA  Refresh")
         self.refresh_btn.clicked.connect(self.refresh_ports)
-        self.refresh_btn.setFixedWidth(100)
+        self.refresh_btn.setMinimumWidth(120)
         conn_layout.addWidget(self.refresh_btn)
 
         self.connect_btn = QtWidgets.QPushButton("Connect")
         self.connect_btn.clicked.connect(self.toggle_connection)
-        self.connect_btn.setFixedWidth(110)
+        self.connect_btn.setMinimumWidth(130)
         conn_layout.addWidget(self.connect_btn)
 
         # Play / Stop button (disabled until connected)
@@ -569,7 +587,7 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         self.stream_btn.setObjectName("streamBtn")
         self.stream_btn.clicked.connect(self.toggle_stream)
         self.stream_btn.setEnabled(False)
-        self.stream_btn.setFixedWidth(120)
+        self.stream_btn.setMinimumWidth(140)
         self.stream_btn.setStyleSheet("""
             QPushButton#streamBtn {
                 background-color: #1a3a1a;
@@ -612,7 +630,7 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         self.refresh_inspector()
 
     def _auto_select_first_packet(self):
-        """Automatically selects the first received packet in the inspector table."""
+        """Automatically selects the 'Average' row in the inspector table."""
         if self.hist_count > 0:
             index = self.packet_model.index(0, 0)
             self.packet_table.setCurrentIndex(index)
@@ -651,33 +669,59 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         if not index.isValid(): return
         
         row = index.row()
-        if self.hist_count < self.max_packets:
-            phys_idx = row
-        else:
-            phys_idx = (self.hist_head + row) % self.max_packets
+        is_avg = (row == 0)
+
+        if is_avg:
+            # --- Special: Calculate Averages ---
+            count = max(1, self.hist_count)
+            # Use only valid parts of buffers
+            t_dma = int(np.mean(self.hist_tel_dma[:count]))
+            t_meta = int(np.mean(self.hist_tel_meta[:count]))
+            t_chk = int(np.mean(self.hist_tel_chk[:count]))
+            t_usb = int(np.mean(self.hist_tel_usb[:count]))
+            t_loop = int(np.mean(self.hist_tel_loop[:count]))
             
-        seq = self.hist_seq[phys_idx]
-        time_us = self.hist_time[phys_idx]
-        flags = self.hist_flags[phys_idx]
-        crc = self.hist_crc[phys_idx]
-        samples = self.hist_samples[phys_idx]
-        t_dma = int(self.hist_tel_dma[phys_idx])
-        t_meta = int(self.hist_tel_meta[phys_idx])
-        t_chk = int(self.hist_tel_chk[phys_idx])
-        t_usb = int(self.hist_tel_usb[phys_idx])
-        t_loop = int(self.hist_tel_loop[phys_idx])
+            seq = "ALL HISTORY"
+            time_us = 0
+            flags = 0
+            crc = 0
+            samples = np.zeros(SAMPLES_PER_BUFFER)
+            banner_title = "▶ HISTORY AVERAGE DATA"
+            banner_color = "#3D8EFF"
+            banner_border = "#1e3a5f"
+        else:
+            # --- Normal: Packet Data ---
+            row_idx = row - 1
+            if self.hist_count < self.max_packets:
+                phys_idx = row_idx
+            else:
+                phys_idx = (self.hist_head + row_idx) % self.max_packets
+                
+            seq = self.hist_seq[phys_idx]
+            time_us = self.hist_time[phys_idx]
+            flags = self.hist_flags[phys_idx]
+            crc = self.hist_crc[phys_idx]
+            samples = self.hist_samples[phys_idx]
+            t_dma = int(self.hist_tel_dma[phys_idx])
+            t_meta = int(self.hist_tel_meta[phys_idx])
+            t_chk = int(self.hist_tel_chk[phys_idx])
+            t_usb = int(self.hist_tel_usb[phys_idx])
+            t_loop = int(self.hist_tel_loop[phys_idx])
+            banner_title = "▶ FRAME DATA"
+            banner_color = "#3D8EFF"
+            banner_border = "#1e3a5f"
         
         # --- Tab 1: Frame Data ---
         frame_html = f"""
         <div style="font-family: monospace; font-size: 13px; background:#0d0d1a; border:1px solid #222; border-radius:6px; padding:8px; margin:2px;">
-            <div style="color:#3D8EFF; font-size:11px; font-weight:bold; letter-spacing:1px; margin-bottom:6px; padding-bottom:4px; border-bottom:1px solid #1e3a5f;">▶ FRAME DATA</div>
+            <div style="color:{banner_color}; font-size:11px; font-weight:bold; letter-spacing:1px; margin-bottom:6px; padding-bottom:4px; border-bottom:1px solid {banner_border};">{banner_title}</div>
             <table width="100%" cellpadding="4" cellspacing="0">
                 <tr>
-                    <td style="color:#666; width:35%;">Sequence ID</td>
+                    <td style="color:#666; width:35%;">{"Packet Range" if is_avg else "Sequence ID"}</td>
                     <td style="color:#39FF14; font-size:15px;"><b>{seq}</b></td>
                 </tr>
                 <tr>
-                    <td style="color:#666;">Timestamp</td>
+                    <td style="color:#666;">{"Avg. Interval" if is_avg else "Timestamp"}</td>
                     <td style="color:#39FF14;">{time_us:,} µs</td>
                 </tr>
                 <tr>
@@ -689,14 +733,17 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
                     <td style="color:#39FF14;">0x{crc:04X}</td>
                 </tr>
                 <tr>
-                    <td style="color:#666;">Samples</td>
-                    <td style="color:#888;">{len(samples):,} points</td>
+                    <td style="color:#666;">Total Points</td>
+                    <td style="color:#888;">{"N/A" if is_avg else f"{len(samples):,}"}</td>
                 </tr>
             </table>
         </div>
         """
         self.detail_text.setHtml(frame_html)
-        self.detail_curve.setData(samples)
+        if is_avg:
+            self.detail_curve.setData([]) # Clear curve for average view
+        else:
+            self.detail_curve.setData(samples)
 
         # --- Tab 2: Telemetry ---
         if t_loop == 0:
@@ -709,7 +756,7 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         else:
             tel_html = f"""
             <div style="font-family: monospace; font-size: 13px; background:#0d0d1a; border:1px solid #222; border-radius:6px; padding:8px; margin:2px;">
-                <div style="color:#72C748; font-size:11px; font-weight:bold; letter-spacing:1px; margin-bottom:6px; padding-bottom:4px; border-bottom:1px solid #2a4a1e;">▶ TELEMETRY  <span style="color:#555; font-size:10px; font-weight:normal;">Seq #{seq}</span></div>
+                <div style="color:#72C748; font-size:11px; font-weight:bold; letter-spacing:1px; margin-bottom:6px; padding-bottom:4px; border-bottom:1px solid #2a4a1e;">{"▶ AVERAGE TELEMETRY" if is_avg else f"▶ TELEMETRY  <span style='color:#555; font-size:10px; font-weight:normal;'>Seq #{seq}</span>"}</div>
                 <table width="100%" cellpadding="4" cellspacing="0">
                     <tr>
                         <td style="color:#666; width:35%;">DMA Transfer</td>
