@@ -101,11 +101,14 @@ class EmulatorWorker(QtCore.QThread):
                 timestamp = int((time.time() - start_time) * 1000)
                 metadata = struct.pack('<IIBB', seq_id, timestamp, 0, 0)
 
+                # Dummy telemetry: dma_us, metadata_us, checksum_us, usb_us, total_us
+                telemetry = struct.pack('<IIIII', 2048, 12, 120, 1800, 3980)
+
                 meta_words = np.frombuffer(metadata, dtype='<H')
                 calc_crc = int(np.bitwise_xor.reduce(meta_words) ^ np.bitwise_xor.reduce(samples))
                 crc_bytes = struct.pack('<H', calc_crc)
 
-                frame = b'\xaa\x55' + metadata + samples.tobytes() + crc_bytes
+                frame = b'\xaa\x55' + telemetry + metadata + samples.tobytes() + crc_bytes
                 
                 try:
                     self.conn.sendall(frame)

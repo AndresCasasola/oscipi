@@ -130,13 +130,18 @@ class SerialPicoSource(DataSource):
                     if byte1 == b'\xaa':
                         byte2 = ser.read(1)
                         if byte2 == b'\x55':
-                            # 1. Read metadata (10 bytes)
+                            # 1. Read Telemetry (20 bytes)
+                            telemetry_raw = ser.read(20)
+                            if len(telemetry_raw) < 20: continue
+                            t_dma, t_meta, t_chk, t_usb, t_loop = struct.unpack('<IIIII', telemetry_raw)
+                            
+                            # 2. Read metadata (10 bytes)
                             metadata = ser.read(10) 
                             if len(metadata) < 10: continue
                             
                             seq_id, timestamp, flags, pad = struct.unpack('<IIBB', metadata)
                             
-                            # 2. Read samples (2048 bytes)
+                            # 3. Read samples (2048 bytes)
                             raw_payload = ser.read(SAMPLES_PER_BUFFER * 2)
                             if len(raw_payload) < SAMPLES_PER_BUFFER * 2: continue
                                 
@@ -157,10 +162,17 @@ class SerialPicoSource(DataSource):
                                     'time': timestamp,
                                     'flags': flags,
                                     'crc': expected_crc,
-                                    'samples': samples
+                                    'samples': samples,
+                                    'telemetry': {
+                                        'dma_us': t_dma,
+                                        'metadata_us': t_meta,
+                                        'checksum_us': t_chk,
+                                        'usb_transport_us': t_usb,
+                                        'total_loop_us': t_loop
+                                    }
                                 }
                                 self.new_data_signal.emit(packet)
-                                bytes_received_total += (14 + SAMPLES_PER_BUFFER * 2)
+                                bytes_received_total += (34 + SAMPLES_PER_BUFFER * 2)
                                 frames_received_total += 1
                                 
                                 if not first_frame_seen:
@@ -240,7 +252,7 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         if os.path.exists(icon_path):
             self.setWindowIcon(QtGui.QIcon(icon_path))
             
-        self.resize(1200, 800)
+        self.resize(1600, 950)
         self.setStyleSheet(get_stylesheet())
         
         # Init Config & Memory
@@ -268,7 +280,7 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
     def init_history_buffer(self):
         # Calculate max packets based on RAM limit.
         ram_gb = self.config.get("ram_limit_gb", 1.0)
-        bytes_per_packet = (SAMPLES_PER_BUFFER * 2) + 4 + 4 + 1 + 2
+        bytes_per_packet = (SAMPLES_PER_BUFFER * 2) + 4 + 4 + 1 + 2 + 20
         total_bytes = ram_gb * 1073741824
         self.max_packets = int(total_bytes / bytes_per_packet)
         
@@ -279,6 +291,12 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         self.hist_time = np.empty(self.max_packets, dtype=np.uint32)
         self.hist_flags = np.empty(self.max_packets, dtype=np.uint8)
         self.hist_crc = np.empty(self.max_packets, dtype=np.uint16)
+        
+        self.hist_tel_dma = np.empty(self.max_packets, dtype=np.uint32)
+        self.hist_tel_meta = np.empty(self.max_packets, dtype=np.uint32)
+        self.hist_tel_chk = np.empty(self.max_packets, dtype=np.uint32)
+        self.hist_tel_usb = np.empty(self.max_packets, dtype=np.uint32)
+        self.hist_tel_loop = np.empty(self.max_packets, dtype=np.uint32)
         
         self.hist_head = 0
         self.hist_count = 0
@@ -336,7 +354,18 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         control_layout.addWidget(self.timebase_slider)
         
         control_layout.addStretch()
-        main_layout.addLayout(control_layout)
+        
+        # Control bar container with distinct background
+        control_container = QtWidgets.QWidget()
+        control_container.setObjectName("controlBar")
+        control_container.setStyleSheet("""
+            QWidget#controlBar {
+                background-color: #0d0d1a;
+                border-bottom: 2px solid #0d6efd;
+            }
+        """)
+        control_container.setLayout(control_layout)
+        main_layout.addWidget(control_container)
 
         # 4. Plot Widget
         self.plot_widget = pg.PlotWidget(title="Real-Time Signal Stream")
@@ -395,7 +424,25 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         # Splitter for Table and Detail View
         splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
         
-        # Left: Table
+        # Left: Table (wrapped in a styled container)
+        table_container = QtWidgets.QWidget()
+        table_container.setObjectName("packetTableContainer")
+        table_container.setStyleSheet("""
+            #packetTableContainer {
+                background: #0a0a14;
+                border: 1px solid #1e1e3a;
+                border-radius: 6px;
+                padding: 4px;
+            }
+        """)
+        table_vbox = QtWidgets.QVBoxLayout(table_container)
+        table_vbox.setContentsMargins(4, 4, 4, 4)
+        table_vbox.setSpacing(2)
+        
+        table_title = QtWidgets.QLabel("◈  PACKET LOG")
+        table_title.setStyleSheet("color: #444; font-size: 10px; font-weight: bold; letter-spacing: 2px; padding: 2px 4px;")
+        table_vbox.addWidget(table_title)
+        
         self.packet_model = PacketTableModel(self)
         self.packet_table = QtWidgets.QTableView()
         self.packet_table.setModel(self.packet_model)
@@ -403,13 +450,14 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         self.packet_table.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
         self.packet_table.verticalHeader().setVisible(False)
         self.packet_table.clicked.connect(self.on_packet_selected)
+        table_vbox.addWidget(self.packet_table)
         
         # Timer to refresh table without blocking UI
         self.table_timer = QtCore.QTimer()
         self.table_timer.timeout.connect(self.refresh_inspector)
         self.table_timer.start(1000) # Refresh table 1 time per second
         
-        splitter.addWidget(self.packet_table)
+        splitter.addWidget(table_container)
         
         # Right: Detail Panel
         detail_widget = QtWidgets.QWidget()
@@ -417,7 +465,7 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         
         self.detail_text = QtWidgets.QTextEdit()
         self.detail_text.setReadOnly(True)
-        self.detail_text.setMaximumHeight(220)
+        self.detail_text.setMaximumHeight(300)
         detail_layout.addWidget(self.detail_text)
         
         self.detail_plot = pg.PlotWidget(title="Packet Signal")
@@ -506,31 +554,97 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         flags = self.hist_flags[phys_idx]
         crc = self.hist_crc[phys_idx]
         samples = self.hist_samples[phys_idx]
+        t_dma = int(self.hist_tel_dma[phys_idx])
+        t_meta = int(self.hist_tel_meta[phys_idx])
+        t_chk = int(self.hist_tel_chk[phys_idx])
+        t_usb = int(self.hist_tel_usb[phys_idx])
+        t_loop = int(self.hist_tel_loop[phys_idx])
         
+        # Proportional widths for stacked bar
+        t_sum = max(1, t_dma + t_meta + t_chk + t_usb)
+        def pct(val): return min(100, int(val / t_sum * 100))
+
         html_info = f"""
-        <div style="font-family: monospace; padding: 5px;">
-            <h2 style="color: #0d6efd; border-bottom: 1px solid #444; padding-bottom: 5px; margin-top: 0;">DATA FRAME PAYLOAD</h2>
-            <table width="100%" cellpadding="4" cellspacing="0">
-                <tr>
-                    <td style="color: #aaaaaa; font-size: 14px;"><b>SEQUENCE ID</b></td>
-                    <td style="color: #39FF14; font-size: 16px;">{seq}</td>
-                </tr>
-                <tr>
-                    <td style="color: #aaaaaa; font-size: 14px;"><b>TIMESTAMP</b></td>
-                    <td style="color: #39FF14; font-size: 16px;">{time_us:,} µs</td>
-                </tr>
-                <tr>
-                    <td style="color: #aaaaaa; font-size: 14px;"><b>FLAGS</b></td>
-                    <td style="color: #39FF14; font-size: 16px;">0x{flags:02X}</td>
-                </tr>
-                <tr>
-                    <td style="color: #aaaaaa; font-size: 14px;"><b>CHECKSUM (CRC)</b></td>
-                    <td style="color: #39FF14; font-size: 16px;">0x{crc:04X}</td>
-                </tr>
-            </table>
+        <div style="font-family: monospace; font-size: 13px; background:#0d0d1a; border:1px solid #222; border-radius:6px; padding:8px; margin:2px;">
+
+            <div style="font-size:12px; font-weight:bold; color:#888; letter-spacing:2px; margin-bottom:8px; padding-bottom:5px; border-bottom:1px solid #222;">
+                ◈ &nbsp;PACKET INSPECTOR
+            </div>
+
+            <table width="100%" cellpadding="0" cellspacing="0"><tr valign="top">
+
+                <!-- LEFT: FRAME DATA -->
+                <td width="48%" style="padding-right:8px;">
+                    <div style="background:#111827; border:1px solid #1e3a5f; border-radius:4px; padding:7px;">
+                        <div style="color:#3D8EFF; font-size:11px; font-weight:bold; letter-spacing:1px; margin-bottom:6px;">▶ FRAME DATA</div>
+                        <table width="100%" cellpadding="3" cellspacing="0">
+                            <tr>
+                                <td style="color:#666; width:40%;">SEQ</td>
+                                <td style="color:#39FF14; font-size:14px;"><b>{seq}</b></td>
+                            </tr>
+                            <tr>
+                                <td style="color:#666;">TIME</td>
+                                <td style="color:#39FF14;">{time_us:,} µs</td>
+                            </tr>
+                            <tr>
+                                <td style="color:#666;">FLAGS</td>
+                                <td style="color:#39FF14;">0x{flags:02X}</td>
+                            </tr>
+                            <tr>
+                                <td style="color:#666;">CRC</td>
+                                <td style="color:#39FF14;">0x{crc:04X}</td>
+                            </tr>
+                        </table>
+                    </div>
+                </td>
+
+                <td width="4%"></td>
+
+                <!-- RIGHT: TELEMETRY -->
+                <td width="48%">
+                    <div style="background:#121a11; border:1px solid #2a4a1e; border-radius:4px; padding:7px;">
+                        <div style="color:#72C748; font-size:11px; font-weight:bold; letter-spacing:1px; margin-bottom:6px;">▶ TELEMETRY</div>
+                        <table width="100%" cellpadding="3" cellspacing="0">
+                            <tr>
+                                <td style="color:#666; width:40%;">DMA</td>
+                                <td style="color:#FF9500;">{t_dma:,} µs</td>
+                            </tr>
+                            <tr>
+                                <td style="color:#666;">Metadata</td>
+                                <td style="color:#3DD6F5;">{t_meta:,} µs</td>
+                            </tr>
+                            <tr>
+                                <td style="color:#666;">Checksum</td>
+                                <td style="color:#BB86FC;">{t_chk:,} µs</td>
+                            </tr>
+                            <tr>
+                                <td style="color:#666;">USB Tx</td>
+                                <td style="color:#FF4C4C;">{t_usb:,} µs</td>
+                            </tr>
+                            <tr style="border-top:1px solid #222;">
+                                <td style="color:#666;">Total Loop</td>
+                                <td style="color:#39FF14;"><b>{t_loop:,} µs</b>&nbsp;<span style="color:#555; font-size:11px;">({t_loop/1000:.2f} ms / {1e6/max(1,t_loop):.1f} FPS)</span></td>
+                            </tr>
+                        </table>
+                    </div>
+                </td>
+
+            </tr></table>
+
+            <!-- Stacked timing bar -->
+            <div style="margin-top:7px; background:#0a0a0a; border-radius:3px; height:8px; overflow:hidden; line-height:0; border:1px solid #1a1a1a;">
+                <span style="display:inline-block; width:{pct(t_dma)}%; height:8px; background:#FF9500;"></span><span style="display:inline-block; width:{pct(t_meta)}%; height:8px; background:#3DD6F5;"></span><span style="display:inline-block; width:{pct(t_chk)}%; height:8px; background:#BB86FC;"></span><span style="display:inline-block; width:{pct(t_usb)}%; height:8px; background:#FF4C4C;"></span>
+            </div>
+            <div style="margin-top:3px; font-size:11px; color:#444;">
+                <span style="color:#FF9500;">■ DMA</span> &nbsp;
+                <span style="color:#3DD6F5;">■ Meta</span> &nbsp;
+                <span style="color:#BB86FC;">■ CRC</span> &nbsp;
+                <span style="color:#FF4C4C;">■ USB</span>
+            </div>
+
         </div>
         """
-        
+
         self.detail_text.setHtml(html_info)
         self.detail_curve.setData(samples)
 
@@ -618,6 +732,13 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         self.hist_flags[h] = packet['flags']
         self.hist_crc[h] = packet['crc']
         self.hist_samples[h] = packet['samples']
+        
+        tel = packet['telemetry']
+        self.hist_tel_dma[h] = tel['dma_us']
+        self.hist_tel_meta[h] = tel['metadata_us']
+        self.hist_tel_chk[h] = tel['checksum_us']
+        self.hist_tel_usb[h] = tel['usb_transport_us']
+        self.hist_tel_loop[h] = tel['total_loop_us']
         
         self.hist_head = (self.hist_head + 1) % self.max_packets
         if self.hist_count < self.max_packets:

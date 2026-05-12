@@ -69,9 +69,10 @@ int main() {
         raw_sin[i] = (uint16_t)(2047 * sin((float)i*6.283/(float)SAMPLES_PER_BUFFER) + 2047); //12 bit
     }
 
-    adc_buffer_t buf;
+    telemetry_frame_t t_frame;
     uint32_t counter = 0;
     const uint8_t header[2] = {0xAA, 0x55};
+    uint32_t t_start_loop = time_us_32();
 
     // ------------------------------------------------------------------------
     // v0.2: DMA CONFIGURATION
@@ -115,7 +116,7 @@ int main() {
     dma_channel_configure(
         chan_data,
         &cfg_data,
-        buf.samples,         // Write to output buffer
+        t_frame.adc_buf.samples,         // Write to output buffer
         raw_sin,             // Read from sine table
         SAMPLES_PER_BUFFER,  // Transfer 1024 samples
         false                // Do not start yet
@@ -128,36 +129,50 @@ int main() {
     // MAIN CPU LOOP
     // ------------------------------------------------------------------------
     while (true) {
+        t_frame.total_loop_us = time_us_32() - t_start_loop;
+        t_start_loop = time_us_32();
+
+        uint32_t t_dma_start = time_us_32();
         // Wait for the DMA data channel to finish the current frame
         dma_channel_wait_for_finish_blocking(chan_data);
+        t_frame.dma_us = time_us_32() - t_dma_start;
 
         // 1. Fill Metadata
-        buf.sequence_id = counter++;
-        buf.timestamp_us = time_us_32();
-        buf.flags = 0;
+        uint32_t t_meta_start = time_us_32();
+        t_frame.adc_buf.sequence_id = counter++;
+        t_frame.adc_buf.timestamp_us = time_us_32();
+        t_frame.adc_buf.flags = 0;
+        t_frame.metadata_us = time_us_32() - t_meta_start;
 
         // 2. Calculate Checksum
-        uint16_t checksum = oscipi_calculate_checksum(&buf);
+        uint32_t t_chk_start = time_us_32();
+        uint16_t checksum = oscipi_calculate_checksum(&t_frame.adc_buf);
+        t_frame.checksum_us = time_us_32() - t_chk_start;
 
         // 3. Send Frame over USB CDC
+        // We estimate the USB time for the current frame from the previous frame to keep things simple
+        uint32_t t_usb_start = time_us_32();
         fwrite(header, 1, 2, stdout);
-        fwrite(&buf.sequence_id, 1, 4, stdout);
-        fwrite(&buf.timestamp_us, 1, 4, stdout);
         
-        uint8_t flags_pad[2] = {buf.flags, 0x00};
+        // Write Telemetry Envelope (20 bytes)
+        fwrite(&t_frame.dma_us, 1, 20, stdout);
+
+        fwrite(&t_frame.adc_buf.sequence_id, 1, 4, stdout);
+        fwrite(&t_frame.adc_buf.timestamp_us, 1, 4, stdout);
+        
+        uint8_t flags_pad[2] = {t_frame.adc_buf.flags, 0x00};
         fwrite(flags_pad, 1, 2, stdout);
         
-        fwrite(buf.samples, 1, SAMPLES_PER_BUFFER * 2, stdout);
+        fwrite(t_frame.adc_buf.samples, 1, SAMPLES_PER_BUFFER * 2, stdout);
         fwrite(&checksum, 1, 2, stdout);
         
         fflush(stdout);
+        t_frame.usb_transport_us = time_us_32() - t_usb_start;
 
-        // Reset the write address for the data channel (since buf is fixed but write_addr increments)
-        dma_hw->ch[chan_data].write_addr = (uint32_t)buf.samples;
+        // Reset the write address for the data channel
+        dma_hw->ch[chan_data].write_addr = (uint32_t)t_frame.adc_buf.samples;
         
         // Reset the control channel's transfer count so it's ready for the next chain
-        // We trigger the Data channel by starting the Data channel directly,
-        // or by starting the Control channel. Let's just start the Data channel.
         dma_hw->ch[chan_ctrl].transfer_count = 1;
         dma_channel_start(chan_data);
     }
