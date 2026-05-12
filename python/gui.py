@@ -9,6 +9,7 @@ import os
 import json
 from PyQt5 import QtWidgets, QtCore, QtGui
 import pyqtgraph as pg
+import psutil
 from theme import get_stylesheet
 
 # --- GLOBAL BUNKER CONFIGURATION ---
@@ -420,8 +421,55 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         self.clear_btn.clicked.connect(self.clear_cache)
         banner_layout.addWidget(self.clear_btn)
         
-        banner_layout.addWidget(QtWidgets.QLabel(f"Pre-allocated: {self.max_packets:,} pkts"))
-        banner_layout.addStretch()
+        banner_layout.addSpacing(20)
+        
+        # --- Memory Monitoring Blocks ---
+        mem_container = QtWidgets.QWidget()
+        mem_h_layout = QtWidgets.QHBoxLayout(mem_container)
+        mem_h_layout.setContentsMargins(0, 0, 0, 0)
+        mem_h_layout.setSpacing(15)
+        
+        bar_style = """
+            QProgressBar {
+                background-color: #05050a;
+                border: 1px solid #1a1a3a;
+                border-radius: 4px;
+                text-align: center;
+                color: #ccc;
+                font-size: 11px;
+                font-weight: bold;
+            }
+            QProgressBar::chunk#sysBar { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1a3a5f, stop:1 #3D8EFF); }
+            QProgressBar::chunk#bufBar { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1a4a1e, stop:1 #72C748); }
+        """
+        
+        # Block 1: App vs System RAM
+        sys_vbox = QtWidgets.QVBoxLayout()
+        sys_vbox.setSpacing(2)
+        sys_lbl = QtWidgets.QLabel("SYSTEM RAM (APP VS TOTAL)")
+        sys_lbl.setStyleSheet("color: #666; font-size: 10px; font-weight: bold; letter-spacing: 1px;")
+        self.sys_mem_bar = QtWidgets.QProgressBar()
+        self.sys_mem_bar.setObjectName("sysBar")
+        self.sys_mem_bar.setFixedHeight(24)
+        self.sys_mem_bar.setStyleSheet(bar_style)
+        sys_vbox.addWidget(sys_lbl)
+        sys_vbox.addWidget(self.sys_mem_bar)
+        mem_h_layout.addLayout(sys_vbox, stretch=1)
+        
+        # Block 2: Packet Buffer Usage
+        buf_vbox = QtWidgets.QVBoxLayout()
+        buf_vbox.setSpacing(2)
+        buf_lbl = QtWidgets.QLabel("PACKET BUFFER (USED VS ALLOC)")
+        buf_lbl.setStyleSheet("color: #666; font-size: 10px; font-weight: bold; letter-spacing: 1px;")
+        self.buf_mem_bar = QtWidgets.QProgressBar()
+        self.buf_mem_bar.setObjectName("bufBar")
+        self.buf_mem_bar.setFixedHeight(24)
+        self.buf_mem_bar.setStyleSheet(bar_style)
+        buf_vbox.addWidget(buf_lbl)
+        buf_vbox.addWidget(self.buf_mem_bar)
+        mem_h_layout.addLayout(buf_vbox, stretch=1)
+        
+        banner_layout.addWidget(mem_container, stretch=1)
         
         banner_widget = QtWidgets.QWidget()
         banner_widget.setObjectName("inspectorBanner")
@@ -526,15 +574,6 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         
         main_layout.addWidget(splitter)
         
-        # Bottom: Memory Progress Bar
-        self.memory_bar = QtWidgets.QProgressBar()
-        self.memory_bar.setMinimum(0)
-        self.memory_bar.setMaximum(self.max_packets)
-        self.memory_bar.setValue(0)
-        self.memory_bar.setFormat("Buffer Usage: 0 / %m Packets (0%)")
-        
-        main_layout.addWidget(self.memory_bar)
-        
         self.tabs.addTab(ins_tab, "Packet Inspector")
 
     def apply_ram_config(self):
@@ -626,7 +665,6 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         self.packet_model.layoutChanged.emit()
         self.detail_text.clear()
         self.detail_curve.setData([])
-        self.memory_bar.setValue(0)
         self.refresh_inspector()
 
     def _auto_select_first_packet(self):
@@ -644,19 +682,34 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         return f"{num_bytes:.2f} PB"
 
     def refresh_inspector(self):
-        """Periodically refreshes the table and progress bar."""
+        """Periodically refreshes the table and memory monitors."""
         self.packet_model.layoutChanged.emit()
-        self.memory_bar.setValue(self.hist_count)
         
-        bytes_per_packet = (SAMPLES_PER_BUFFER * 2) + 4 + 4 + 1 + 2
+        # 1. Update System RAM Bar
+        try:
+            process = psutil.Process(os.getpid())
+            app_mem = process.memory_info().rss
+            sys_mem = psutil.virtual_memory()
+            
+            self.sys_mem_bar.setMaximum(1000)
+            self.sys_mem_bar.setValue(int((app_mem / sys_mem.total) * 1000))
+            self.sys_mem_bar.setFormat(f"APP: {self.format_bytes(app_mem)}  /  SYS: {self.format_bytes(sys_mem.total)} ({app_mem/sys_mem.total*100:.1f}%)")
+        except: pass
+        
+        # 2. Update Packet Buffer Bar
+        bytes_per_packet = (SAMPLES_PER_BUFFER * 2) + 4 + 4 + 1 + 2 + 20
         used_bytes = self.hist_count * bytes_per_packet
         total_bytes = self.max_packets * bytes_per_packet
-        
         pct = (self.hist_count / max(1, self.max_packets)) * 100
         
-        fmt = f"Buffer Usage: {self.hist_count:,} / {self.max_packets:,} Packets "
-        fmt += f"({self.format_bytes(used_bytes)} / {self.format_bytes(total_bytes)})  -  {pct:.1f}%"
-        self.memory_bar.setFormat(fmt)
+        self.buf_mem_bar.setMaximum(self.max_packets)
+        self.buf_mem_bar.setValue(self.hist_count)
+        self.buf_mem_bar.setFormat(f"BUF: {self.format_bytes(used_bytes)}  /  {self.format_bytes(total_bytes)}  ({self.hist_count:,} / {self.max_packets:,} pkts)")
+
+        # 3. Refresh selection if 'Average' is selected
+        idx = self.packet_table.currentIndex()
+        if idx.isValid() and idx.row() == 0:
+            self.on_packet_selected(idx)
 
     def clear_oscilloscope(self):
         """Clears the live oscilloscope display buffer."""
