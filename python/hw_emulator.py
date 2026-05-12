@@ -102,7 +102,7 @@ class EmulatorWorker(QtCore.QThread):
                 metadata = struct.pack('<IIBB', seq_id, timestamp, 0, 0)
 
                 # Dummy telemetry: dma_us, metadata_us, checksum_us, usb_us, total_us
-                telemetry = struct.pack('<IIIII', 2048, 12, 120, 1800, 3980)
+                telemetry = struct.pack('<IIIII', 0, 0, 0, 0, 0)
 
                 meta_words = np.frombuffer(metadata, dtype='<H')
                 calc_crc = int(np.bitwise_xor.reduce(meta_words) ^ np.bitwise_xor.reduce(samples))

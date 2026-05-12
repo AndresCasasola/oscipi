@@ -107,6 +107,10 @@ class TCPSerialWrapper:
 
 class SerialPicoSource(DataSource):
     """Real Driver: Reads the framing protocol and monitors transfer performance"""
+    def __init__(self):
+        super().__init__()
+        self.streaming = True   # When False, port stays open but data is discarded
+
     def run(self):
         # Performance monitoring variables
         bytes_received_total = 0
@@ -145,13 +149,17 @@ class SerialPicoSource(DataSource):
                             raw_payload = ser.read(SAMPLES_PER_BUFFER * 2)
                             if len(raw_payload) < SAMPLES_PER_BUFFER * 2: continue
                                 
-                            # 3. Read checksum (2 bytes)
+                            # 4. Read checksum (2 bytes)
                             crc_bytes = ser.read(2)
                             if len(crc_bytes) < 2: continue
                             
                             expected_crc = struct.unpack('<H', crc_bytes)[0]
+
+                            # Discard frame if not streaming
+                            if not self.streaming:
+                                continue
                             
-                            # 4. Process and Emit
+                            # 5. Process and Emit
                             samples = np.frombuffer(raw_payload, dtype='<H')
                             meta_words = np.frombuffer(metadata, dtype='<H')
                             calc_crc = int(np.bitwise_xor.reduce(meta_words) ^ np.bitwise_xor.reduce(samples))
@@ -187,10 +195,7 @@ class SerialPicoSource(DataSource):
                         elapsed = current_time - start_perf_time
                         kbps = (bytes_received_total / 1024) / elapsed
                         fps = frames_received_total / elapsed
-                        
-                        # Monitor simple de consola
                         print(f"| [THROUGHPUT] {kbps:>7.2f} KB/s | [FPS] {fps:>5.1f} frames/s |")
-                        
                         bytes_received_total = 0
                         frames_received_total = 0
                         start_perf_time = current_time
@@ -274,8 +279,9 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
             self.refresh_btn.setEnabled(False)
             self.connect_btn.setEnabled(False)
             self.start_simulation()
-        else:
-            self.statusBar().showMessage("DISCONNECTED - Please select a COM port and connect.")
+
+        # Global connection bar at bottom
+        self._build_global_connection_bar()
 
     def init_history_buffer(self):
         # Calculate max packets based on RAM limit.
@@ -306,19 +312,9 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         osc_tab = QtWidgets.QWidget()
         main_layout = QtWidgets.QVBoxLayout(osc_tab)
         
-        # 3. Top Control Bar
+        # Top Control Bar (oscilloscope-specific: ADC range + zoom only)
         control_layout = QtWidgets.QHBoxLayout()
-        
-        self.port_combo = QtWidgets.QComboBox()
-        self.port_combo.setItemDelegate(QtWidgets.QStyledItemDelegate())
-        self.port_combo.setMinimumWidth(250)
-        self.refresh_ports()
-        
-        self.refresh_btn = QtWidgets.QPushButton("Refresh Ports")
-        self.refresh_btn.clicked.connect(self.refresh_ports)
-        
-        self.connect_btn = QtWidgets.QPushButton("Connect")
-        self.connect_btn.clicked.connect(self.toggle_connection)
+        control_layout.setContentsMargins(6, 3, 6, 3)
         
         self.clear_osc_btn = QtWidgets.QPushButton("Clear Display")
         self.clear_osc_btn.clicked.connect(self.clear_oscilloscope)
@@ -333,35 +329,25 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         self.timebase_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
         self.timebase_slider.setMinimum(100)
         self.timebase_slider.setMaximum(SAMPLES_PER_BUFFER * DISPLAY_CHUNKS)
-        # Default to a medium zoom (e.g., 5 chunks = 5120 samples) so it's not too squished on startup
         self.timebase_slider.setValue(SAMPLES_PER_BUFFER * 5)
         self.timebase_slider.setMinimumWidth(250)
         self.timebase_slider.valueChanged.connect(self.update_timebase)
         
-        control_layout.addWidget(QtWidgets.QLabel("COM Port:"))
-        control_layout.addWidget(self.port_combo)
-        control_layout.addWidget(self.refresh_btn)
-        control_layout.addWidget(self.connect_btn)
         control_layout.addWidget(self.clear_osc_btn)
-        
         control_layout.addSpacing(20)
         control_layout.addWidget(QtWidgets.QLabel("ADC Range:"))
         control_layout.addWidget(self.voltage_spin)
-        
-        # Add some spacing before time scale
         control_layout.addSpacing(20)
         control_layout.addWidget(QtWidgets.QLabel("Time Scale (Zoom):"))
         control_layout.addWidget(self.timebase_slider)
-        
         control_layout.addStretch()
         
-        # Control bar container with distinct background
         control_container = QtWidgets.QWidget()
         control_container.setObjectName("controlBar")
         control_container.setStyleSheet("""
             QWidget#controlBar {
                 background-color: #0d0d1a;
-                border-bottom: 2px solid #0d6efd;
+                border-bottom: 1px solid #1a2a4a;
             }
         """)
         control_container.setLayout(control_layout)
@@ -398,8 +384,9 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         ins_tab = QtWidgets.QWidget()
         main_layout = QtWidgets.QVBoxLayout(ins_tab)
         
-        # Top banner for config
+        # Top banner for config (compact)
         banner_layout = QtWidgets.QHBoxLayout()
+        banner_layout.setContentsMargins(6, 4, 6, 4)
         banner_layout.addWidget(QtWidgets.QLabel("RAM Limit (GB):"))
         
         self.ram_spin = QtWidgets.QDoubleSpinBox()
@@ -416,10 +403,14 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         self.clear_btn.clicked.connect(self.clear_cache)
         banner_layout.addWidget(self.clear_btn)
         
-        banner_layout.addWidget(QtWidgets.QLabel(f"Pre-allocated size: {self.max_packets:,} packets"))
+        banner_layout.addWidget(QtWidgets.QLabel(f"Pre-allocated: {self.max_packets:,} pkts"))
         banner_layout.addStretch()
         
-        main_layout.addLayout(banner_layout)
+        banner_widget = QtWidgets.QWidget()
+        banner_widget.setObjectName("inspectorBanner")
+        banner_widget.setStyleSheet("QWidget#inspectorBanner { background-color: #0d0d1a; border-bottom: 1px solid #1a2a4a; }")
+        banner_widget.setLayout(banner_layout)
+        main_layout.addWidget(banner_widget)
         
         # Splitter for Table and Detail View
         splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
@@ -459,22 +450,60 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         
         splitter.addWidget(table_container)
         
-        # Right: Detail Panel
-        detail_widget = QtWidgets.QWidget()
-        detail_layout = QtWidgets.QVBoxLayout(detail_widget)
-        
+        # Right: Detail Panel with sub-tabs
+        detail_tabs = QtWidgets.QTabWidget()
+        detail_tabs.setStyleSheet("""
+            QTabBar::tab { min-width: 80px; padding: 6px 16px; font-size: 12px; }
+        """)
+
+        # --- Sub-tab 1: Frame Data ---
+        frame_tab = QtWidgets.QWidget()
+        frame_layout = QtWidgets.QVBoxLayout(frame_tab)
+        frame_layout.setContentsMargins(4, 4, 4, 4)
+
         self.detail_text = QtWidgets.QTextEdit()
         self.detail_text.setReadOnly(True)
-        self.detail_text.setMaximumHeight(300)
-        detail_layout.addWidget(self.detail_text)
-        
+        self.detail_text.setMaximumHeight(220)
+        frame_layout.addWidget(self.detail_text)
+
         self.detail_plot = pg.PlotWidget(title="Packet Signal")
         self.detail_plot.showGrid(x=True, y=True, alpha=0.2)
         self.detail_plot.setYRange(0, ADC_MAX_VAL)
         self.detail_curve = self.detail_plot.plot(pen=pg.mkPen(color='#FF00FF', width=1.5))
-        detail_layout.addWidget(self.detail_plot)
-        
-        splitter.addWidget(detail_widget)
+        frame_layout.addWidget(self.detail_plot)
+
+        detail_tabs.addTab(frame_tab, "Frame Data")
+
+        # --- Sub-tab 2: Telemetry ---
+        tel_tab = QtWidgets.QWidget()
+        tel_layout = QtWidgets.QVBoxLayout(tel_tab)
+        tel_layout.setContentsMargins(4, 4, 4, 4)
+
+        self.tel_text = QtWidgets.QTextEdit()
+        self.tel_text.setReadOnly(True)
+        self.tel_text.setMaximumHeight(170)
+        tel_layout.addWidget(self.tel_text)
+
+        self.tel_bar_plot = pg.PlotWidget()
+        self.tel_bar_plot.setBackground('#0d0d1a')
+        self.tel_bar_plot.showGrid(x=False, y=True, alpha=0.15)
+        self.tel_bar_plot.setMouseEnabled(x=False, y=False)
+        self.tel_bar_plot.getAxis('bottom').setTicks([[
+            (0, 'DMA'), (1, 'Metadata'), (2, 'Checksum'), (3, 'USB Tx')
+        ]])
+        self.tel_bar_plot.setLabel('left', 'Time', units='µs')
+        self.tel_bar_items = []
+        bar_colors = ['#FF9500', '#3DD6F5', '#BB86FC', '#FF4C4C']
+        for i, color in enumerate(bar_colors):
+            bar = pg.BarGraphItem(x=[i], height=[0], width=0.6,
+                                  brush=color, pen=pg.mkPen(color, width=1))
+            self.tel_bar_plot.addItem(bar)
+            self.tel_bar_items.append(bar)
+        tel_layout.addWidget(self.tel_bar_plot)
+
+        detail_tabs.addTab(tel_tab, "Telemetry")
+
+        splitter.addWidget(detail_tabs)
         splitter.setSizes([400, 600])
         
         main_layout.addWidget(splitter)
@@ -501,6 +530,77 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         # Restart process
         os.execv(sys.executable, ['python'] + sys.argv)
 
+    def _build_global_connection_bar(self):
+        """Creates a persistent connection toolbar shown at the bottom of every tab."""
+        conn_widget = QtWidgets.QWidget()
+        conn_widget.setObjectName("globalConnBar")
+        conn_widget.setStyleSheet("""
+            QWidget#globalConnBar {
+                background-color: #0a0a12;
+                border-top: 1px solid #1a2a4a;
+            }
+        """)
+        conn_layout = QtWidgets.QHBoxLayout(conn_widget)
+        conn_layout.setContentsMargins(8, 4, 8, 4)
+        conn_layout.setSpacing(8)
+
+        port_label = QtWidgets.QLabel("COM Port:")
+        port_label.setStyleSheet("color: #666; font-size: 13px;")
+        conn_layout.addWidget(port_label)
+
+        self.port_combo = QtWidgets.QComboBox()
+        self.port_combo.setItemDelegate(QtWidgets.QStyledItemDelegate())
+        self.port_combo.setMinimumWidth(240)
+        self.refresh_ports()
+        conn_layout.addWidget(self.port_combo)
+
+        self.refresh_btn = QtWidgets.QPushButton("\u27F3  Refresh")
+        self.refresh_btn.clicked.connect(self.refresh_ports)
+        self.refresh_btn.setFixedWidth(100)
+        conn_layout.addWidget(self.refresh_btn)
+
+        self.connect_btn = QtWidgets.QPushButton("Connect")
+        self.connect_btn.clicked.connect(self.toggle_connection)
+        self.connect_btn.setFixedWidth(110)
+        conn_layout.addWidget(self.connect_btn)
+
+        # Play / Stop button (disabled until connected)
+        self.stream_btn = QtWidgets.QPushButton("\u25B6  Stream")
+        self.stream_btn.setObjectName("streamBtn")
+        self.stream_btn.clicked.connect(self.toggle_stream)
+        self.stream_btn.setEnabled(False)
+        self.stream_btn.setFixedWidth(120)
+        self.stream_btn.setStyleSheet("""
+            QPushButton#streamBtn {
+                background-color: #1a3a1a;
+                color: #4CAF50;
+                border: 1px solid #2d5a2d;
+            }
+            QPushButton#streamBtn:hover { background-color: #245024; }
+            QPushButton#streamBtn:disabled { background-color: #1a1a1a; color: #444; border-color: #333; }
+        """)
+        conn_layout.addWidget(self.stream_btn)
+
+        conn_layout.addStretch()
+
+        # Status indicator on the right
+        self.conn_status_dot = QtWidgets.QLabel("●")
+        self.conn_status_dot.setStyleSheet("color: #333; font-size: 16px; padding-right: 2px;")
+        self.conn_status_label = QtWidgets.QLabel("DISCONNECTED")
+        self.conn_status_label.setStyleSheet("color: #555; font-size: 12px; font-family: monospace; letter-spacing: 1px;")
+        conn_layout.addWidget(self.conn_status_dot)
+        conn_layout.addWidget(self.conn_status_label)
+
+        # Embed above the native status bar
+        central = self.centralWidget()
+        outer = QtWidgets.QWidget()
+        outer_layout = QtWidgets.QVBoxLayout(outer)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
+        outer_layout.addWidget(central)
+        outer_layout.addWidget(conn_widget)
+        self.setCentralWidget(outer)
+
     def clear_cache(self):
         """Resets the history buffer pointers, effectively emptying the packet log."""
         self.hist_head = 0
@@ -510,6 +610,13 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         self.detail_curve.setData([])
         self.memory_bar.setValue(0)
         self.refresh_inspector()
+
+    def _auto_select_first_packet(self):
+        """Automatically selects the first received packet in the inspector table."""
+        if self.hist_count > 0:
+            index = self.packet_model.index(0, 0)
+            self.packet_table.setCurrentIndex(index)
+            self.on_packet_selected(index)
 
     def format_bytes(self, num_bytes):
         for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
@@ -560,93 +667,84 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         t_usb = int(self.hist_tel_usb[phys_idx])
         t_loop = int(self.hist_tel_loop[phys_idx])
         
-        # Proportional widths for stacked bar
-        t_sum = max(1, t_dma + t_meta + t_chk + t_usb)
-        def pct(val): return min(100, int(val / t_sum * 100))
-
-        html_info = f"""
+        # --- Tab 1: Frame Data ---
+        frame_html = f"""
         <div style="font-family: monospace; font-size: 13px; background:#0d0d1a; border:1px solid #222; border-radius:6px; padding:8px; margin:2px;">
-
-            <div style="font-size:12px; font-weight:bold; color:#888; letter-spacing:2px; margin-bottom:8px; padding-bottom:5px; border-bottom:1px solid #222;">
-                ◈ &nbsp;PACKET INSPECTOR
-            </div>
-
-            <table width="100%" cellpadding="0" cellspacing="0"><tr valign="top">
-
-                <!-- LEFT: FRAME DATA -->
-                <td width="48%" style="padding-right:8px;">
-                    <div style="background:#111827; border:1px solid #1e3a5f; border-radius:4px; padding:7px;">
-                        <div style="color:#3D8EFF; font-size:11px; font-weight:bold; letter-spacing:1px; margin-bottom:6px;">▶ FRAME DATA</div>
-                        <table width="100%" cellpadding="3" cellspacing="0">
-                            <tr>
-                                <td style="color:#666; width:40%;">SEQ</td>
-                                <td style="color:#39FF14; font-size:14px;"><b>{seq}</b></td>
-                            </tr>
-                            <tr>
-                                <td style="color:#666;">TIME</td>
-                                <td style="color:#39FF14;">{time_us:,} µs</td>
-                            </tr>
-                            <tr>
-                                <td style="color:#666;">FLAGS</td>
-                                <td style="color:#39FF14;">0x{flags:02X}</td>
-                            </tr>
-                            <tr>
-                                <td style="color:#666;">CRC</td>
-                                <td style="color:#39FF14;">0x{crc:04X}</td>
-                            </tr>
-                        </table>
-                    </div>
-                </td>
-
-                <td width="4%"></td>
-
-                <!-- RIGHT: TELEMETRY -->
-                <td width="48%">
-                    <div style="background:#121a11; border:1px solid #2a4a1e; border-radius:4px; padding:7px;">
-                        <div style="color:#72C748; font-size:11px; font-weight:bold; letter-spacing:1px; margin-bottom:6px;">▶ TELEMETRY</div>
-                        <table width="100%" cellpadding="3" cellspacing="0">
-                            <tr>
-                                <td style="color:#666; width:40%;">DMA</td>
-                                <td style="color:#FF9500;">{t_dma:,} µs</td>
-                            </tr>
-                            <tr>
-                                <td style="color:#666;">Metadata</td>
-                                <td style="color:#3DD6F5;">{t_meta:,} µs</td>
-                            </tr>
-                            <tr>
-                                <td style="color:#666;">Checksum</td>
-                                <td style="color:#BB86FC;">{t_chk:,} µs</td>
-                            </tr>
-                            <tr>
-                                <td style="color:#666;">USB Tx</td>
-                                <td style="color:#FF4C4C;">{t_usb:,} µs</td>
-                            </tr>
-                            <tr style="border-top:1px solid #222;">
-                                <td style="color:#666;">Total Loop</td>
-                                <td style="color:#39FF14;"><b>{t_loop:,} µs</b>&nbsp;<span style="color:#555; font-size:11px;">({t_loop/1000:.2f} ms / {1e6/max(1,t_loop):.1f} FPS)</span></td>
-                            </tr>
-                        </table>
-                    </div>
-                </td>
-
-            </tr></table>
-
-            <!-- Stacked timing bar -->
-            <div style="margin-top:7px; background:#0a0a0a; border-radius:3px; height:8px; overflow:hidden; line-height:0; border:1px solid #1a1a1a;">
-                <span style="display:inline-block; width:{pct(t_dma)}%; height:8px; background:#FF9500;"></span><span style="display:inline-block; width:{pct(t_meta)}%; height:8px; background:#3DD6F5;"></span><span style="display:inline-block; width:{pct(t_chk)}%; height:8px; background:#BB86FC;"></span><span style="display:inline-block; width:{pct(t_usb)}%; height:8px; background:#FF4C4C;"></span>
-            </div>
-            <div style="margin-top:3px; font-size:11px; color:#444;">
-                <span style="color:#FF9500;">■ DMA</span> &nbsp;
-                <span style="color:#3DD6F5;">■ Meta</span> &nbsp;
-                <span style="color:#BB86FC;">■ CRC</span> &nbsp;
-                <span style="color:#FF4C4C;">■ USB</span>
-            </div>
-
+            <div style="color:#3D8EFF; font-size:11px; font-weight:bold; letter-spacing:1px; margin-bottom:6px; padding-bottom:4px; border-bottom:1px solid #1e3a5f;">▶ FRAME DATA</div>
+            <table width="100%" cellpadding="4" cellspacing="0">
+                <tr>
+                    <td style="color:#666; width:35%;">Sequence ID</td>
+                    <td style="color:#39FF14; font-size:15px;"><b>{seq}</b></td>
+                </tr>
+                <tr>
+                    <td style="color:#666;">Timestamp</td>
+                    <td style="color:#39FF14;">{time_us:,} µs</td>
+                </tr>
+                <tr>
+                    <td style="color:#666;">Flags</td>
+                    <td style="color:#39FF14;">0x{flags:02X}</td>
+                </tr>
+                <tr>
+                    <td style="color:#666;">CRC</td>
+                    <td style="color:#39FF14;">0x{crc:04X}</td>
+                </tr>
+                <tr>
+                    <td style="color:#666;">Samples</td>
+                    <td style="color:#888;">{len(samples):,} points</td>
+                </tr>
+            </table>
         </div>
         """
-
-        self.detail_text.setHtml(html_info)
+        self.detail_text.setHtml(frame_html)
         self.detail_curve.setData(samples)
+
+        # --- Tab 2: Telemetry ---
+        if t_loop == 0:
+            tel_html = f"""
+            <div style="font-family: monospace; font-size: 13px; background:#0d0d1a; border:1px solid #222; border-radius:6px; padding:20px; margin:2px; text-align:center;">
+                <div style="color:#555; font-size:18px; font-weight:bold; letter-spacing:2px; margin-bottom:10px;">◈ NO TELEMETRY DATA</div>
+                <div style="color:#444; font-size:12px;">The connected hardware is not sending timing metrics for this frame.</div>
+            </div>
+            """
+        else:
+            tel_html = f"""
+            <div style="font-family: monospace; font-size: 13px; background:#0d0d1a; border:1px solid #222; border-radius:6px; padding:8px; margin:2px;">
+                <div style="color:#72C748; font-size:11px; font-weight:bold; letter-spacing:1px; margin-bottom:6px; padding-bottom:4px; border-bottom:1px solid #2a4a1e;">▶ TELEMETRY  <span style="color:#555; font-size:10px; font-weight:normal;">Seq #{seq}</span></div>
+                <table width="100%" cellpadding="4" cellspacing="0">
+                    <tr>
+                        <td style="color:#666; width:35%;">DMA Transfer</td>
+                        <td style="color:#FF9500;"><b>{t_dma:,} µs</b></td>
+                        <td style="color:#555; font-size:11px;">{t_dma/max(1,t_loop)*100:.1f}% of loop</td>
+                    </tr>
+                    <tr>
+                        <td style="color:#666;">Metadata Fill</td>
+                        <td style="color:#3DD6F5;"><b>{t_meta:,} µs</b></td>
+                        <td style="color:#555; font-size:11px;">{t_meta/max(1,t_loop)*100:.1f}%</td>
+                    </tr>
+                    <tr>
+                        <td style="color:#666;">Checksum Calc</td>
+                        <td style="color:#BB86FC;"><b>{t_chk:,} µs</b></td>
+                        <td style="color:#555; font-size:11px;">{t_chk/max(1,t_loop)*100:.1f}%</td>
+                    </tr>
+                    <tr>
+                        <td style="color:#666;">USB Transport</td>
+                        <td style="color:#FF4C4C;"><b>{t_usb:,} µs</b></td>
+                        <td style="color:#555; font-size:11px;">{t_usb/max(1,t_loop)*100:.1f}%</td>
+                    </tr>
+                    <tr style="border-top:1px solid #222; margin-top:4px;">
+                        <td style="color:#888;">Total Loop</td>
+                        <td style="color:#39FF14;"><b>{t_loop:,} µs</b></td>
+                        <td style="color:#555; font-size:11px;">{t_loop/1000:.2f} ms &nbsp;|&nbsp; {1e6/max(1,t_loop):.1f} FPS</td>
+                    </tr>
+                </table>
+            </div>
+            """
+        self.tel_text.setHtml(tel_html)
+
+        # Update bar chart
+        heights = [t_dma, t_meta, t_chk, t_usb]
+        for bar_item, h in zip(self.tel_bar_items, heights):
+            bar_item.setOpts(height=h)
 
     def update_timebase(self, value):
         """Updates the X-axis range to zoom into the latest samples on the right side of the screen."""
@@ -674,34 +772,82 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
             self.port_combo.addItem(f"{p.device} - {p.description}", p.device)
         self.port_combo.addItem("TCP Localhost:5555 (Emulator)", "tcp:127.0.0.1:5555")
 
+    def _set_conn_status(self, state):
+        """Updates the status indicator. state: 'disconnected', 'connected', 'streaming'"""
+        styles = {
+            'disconnected': ('color: #444; font-size: 16px;', 'color: #555; font-size: 12px; font-family: monospace; letter-spacing: 1px;', '●', 'DISCONNECTED'),
+            'connected':    ('color: #FF9500; font-size: 16px;', 'color: #FF9500; font-size: 12px; font-family: monospace; letter-spacing: 1px;', '●', 'CONNECTED — IDLE'),
+            'streaming':    ('color: #39FF14; font-size: 16px;', 'color: #39FF14; font-size: 12px; font-family: monospace; letter-spacing: 1px;', '●', 'STREAMING'),
+        }
+        dot_style, lbl_style, dot_char, lbl_text = styles.get(state, styles['disconnected'])
+        self.conn_status_dot.setStyleSheet(dot_style)
+        self.conn_status_dot.setText(dot_char)
+        self.conn_status_label.setStyleSheet(lbl_style)
+        self.conn_status_label.setText(lbl_text)
+
     def toggle_connection(self):
-        """Connects or disconnects the serial data source"""
+        """Opens or closes the serial port connection (does NOT start streaming)."""
         if self.data_source is not None and self.data_source.isRunning():
-            # Stop the source if it's running
+            # Disconnect
             self.data_source.stop()
             self.data_source.wait()
             self.data_source = None
             self.connect_btn.setText("Connect")
             self.port_combo.setEnabled(True)
             self.refresh_btn.setEnabled(True)
-            self.statusBar().showMessage("DISCONNECTED")
+            self.stream_btn.setEnabled(False)
+            self.stream_btn.setText("\u25B6  Stream")
+            self.stream_btn.setStyleSheet("""
+                QPushButton#streamBtn {
+                    background-color: #1a3a1a; color: #4CAF50; border: 1px solid #2d5a2d;
+                }
+                QPushButton#streamBtn:disabled { background-color: #1a1a1a; color: #444; border-color: #333; }
+            """)
+            self._set_conn_status('disconnected')
         else:
-            # Start the connection
             if self.port_combo.count() == 0:
-                self.statusBar().showMessage("ERROR: No COM port selected.")
                 return
-                
             port = self.port_combo.currentData()
             self.data_source = SerialPicoSource()
             self.data_source.port = port
+            self.data_source.streaming = False   # Start in idle mode
             self.data_source.new_data_signal.connect(self.update_plot)
             self.data_source.error_signal.connect(self.handle_source_error)
             self.data_source.start()
-            
             self.connect_btn.setText("Disconnect")
             self.port_combo.setEnabled(False)
             self.refresh_btn.setEnabled(False)
-            self.statusBar().showMessage(f"CONNECTED TO: {port}")
+            self.stream_btn.setEnabled(True)
+            self._set_conn_status('connected')
+
+    def toggle_stream(self):
+        """Starts or pauses data streaming on an already-open connection."""
+        if self.data_source is None:
+            return
+        if self.data_source.streaming:
+            # Pause
+            self.data_source.streaming = False
+            self.stream_btn.setText("\u25B6  Stream")
+            self.stream_btn.setStyleSheet("""
+                QPushButton#streamBtn {
+                    background-color: #1a3a1a; color: #4CAF50; border: 1px solid #2d5a2d;
+                }
+                QPushButton#streamBtn:hover { background-color: #245024; }
+                QPushButton#streamBtn:disabled { background-color: #1a1a1a; color: #444; }
+            """)
+            self._set_conn_status('connected')
+        else:
+            # Play
+            self.data_source.streaming = True
+            self.stream_btn.setText("\u23F9  Stop")
+            self.stream_btn.setStyleSheet("""
+                QPushButton#streamBtn {
+                    background-color: #3a1a1a; color: #FF4C4C; border: 1px solid #5a2d2d;
+                }
+                QPushButton#streamBtn:hover { background-color: #502424; }
+                QPushButton#streamBtn:disabled { background-color: #1a1a1a; color: #444; }
+            """)
+            self._set_conn_status('streaming')
 
     def handle_source_error(self, err_msg):
         """Handles connection drops or port setup failures."""
@@ -709,11 +855,12 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
             self.data_source.stop()
             self.data_source.wait()
             self.data_source = None
-            
         self.connect_btn.setText("Connect")
         self.port_combo.setEnabled(True)
         self.refresh_btn.setEnabled(True)
-        self.statusBar().showMessage(f"CONNECTION ERROR: {err_msg}")
+        self.stream_btn.setEnabled(False)
+        self.stream_btn.setText("\u25B6  Stream")
+        self._set_conn_status('disconnected')
         QtWidgets.QMessageBox.critical(self, "Connection Error", f"Lost connection or failed to configure port:\n{err_msg}")
 
     def start_simulation(self):
@@ -721,7 +868,7 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         self.data_source = MockPicoSource()
         self.data_source.new_data_signal.connect(self.update_plot)
         self.data_source.start()
-        self.statusBar().showMessage("SIMULATION MODE ACTIVE (No Hardware)")
+        self._set_conn_status('streaming')
 
     def update_plot(self, packet):
         """Immediately renders the new hardware frame to screen for zero-latency plotting."""
@@ -743,6 +890,11 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         self.hist_head = (self.hist_head + 1) % self.max_packets
         if self.hist_count < self.max_packets:
             self.hist_count += 1
+
+        # Auto-select first packet in inspector if it's the first one
+        if self.hist_count == 1:
+            QtCore.QTimer.singleShot(0, self._auto_select_first_packet)
+
 
         # --- 2. Update Oscilloscope Display ---
         new_samples = packet['samples']
