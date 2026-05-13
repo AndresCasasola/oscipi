@@ -1,6 +1,6 @@
 # Oscipi Reports
 
-## v0.2 - Performance Analysis & Bottleneck Identification
+## v0.2 - DMA (Single Buffer)
 
 ### 1. Experiment Overview
 

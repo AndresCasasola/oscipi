@@ -7,18 +7,18 @@ gitGraph
     checkout main
     branch "Releases"
     checkout "Releases"
-    commit tag:"v0.1" id: "Feat: Manual CPU Sampling"
-    commit tag:"v0.2" id: "Feat: DMA (Single Buffer)"
-    commit tag:"v0.3" id: "Feat: DMA (Double Buffering)"
-    commit tag:"v0.4" id: "Feat: ADC Streaming"
-    commit tag:"v0.5" id: "Feat: RTOS Multi-Tasking"
-    commit tag:"v0.6" id: "Feat: Command Console"
+    commit tag:"v0.1" id: "Manual CPU Sampling"
+    commit tag:"v0.2" id: "DMA (Single Buffer)"
+    commit tag:"v0.3" id: "DMA (Double Buffering)"
+    commit tag:"v0.4" id: "ADC Streaming"
+    commit tag:"v0.5" id: "RTOS Multi-Tasking"
+    commit tag:"v0.6" id: "Command Console"
 
 ```
 
 ---
 
-### v0.1: Feat: Manual CPU Sampling
+### v0.1 - Manual CPU Sampling
 
 #### Description
 
@@ -59,7 +59,7 @@ Currently, the UI is purely a passive listener (it receives data and visualizes 
 
 ---
 
-### v0.2: Feat: DMA (Single Buffer)
+### v0.2 - DMA (Single Buffer)
 
 #### Description
 
@@ -77,7 +77,7 @@ This version offloads data movement to the DMA hardware using a paced Timer (DRE
 
 ---
 
-### v0.3: Feat: DMA (Double Buffering)
+### v0.3 - DMA (Double Buffering)
 
 #### Description
 
@@ -99,7 +99,7 @@ Tienes toda la razón, se me cruzaron los cables con el orden de las versiones. 
 
 ---
 
-### v0.4: Feat: ADC Streaming
+### v0.4 - ADC Streaming
 
 #### Description
 
@@ -117,7 +117,7 @@ Managing the ADC, DMA, and USB simultaneously in a single loop starts to hit the
 
 ---
 
-### v0.5: Feat: RTOS Multi-Tasking
+### v0.5 - RTOS Multi-Tasking
 
 #### Description
 
@@ -135,7 +135,7 @@ The system is robust but still "dumb"—it only sends data. The next step is add
 
 ---
 
-### v0.6: Feat: Command Console
+### v0.6 - Command Console
 
 #### Description
 
