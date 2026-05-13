@@ -16,6 +16,15 @@ In this version, all operations were handled sequentially by the CPU in a simple
 *   **Data Generation:** Synthetic sine wave generated on-the-fly using `sin()` math functions.
 *   **Transport:** Data was sent as binary chunks using `fwrite`.
 
+```mermaid
+flowchart TD
+    Start((Loop Start)) --> Sample[Sample 1024 points<br/>'CPU Busy Loop']
+    Sample --> Meta[Fill Metadata<br/>'SeqID, Timestamp']
+    Meta --> CRC[Calculate Checksum]
+    CRC --> USB[Send Frame via USB<br/>'Blocking fwrite']
+    USB --> Start
+```
+
 ### 2. Elementary Data Structure (`adc_buffer_t`)
 
 Even in its most primitive form, the project established a strict memory layout to ensure the Python GUI could parse packets reliably. This structure remains the core of the Oscipi protocol:
@@ -51,6 +60,33 @@ The v0.2 transition moved the sampling responsibility to the **RP2040 DMA Engine
 
 *   **DMA DREQ Pacing:** A hardware timer triggers the DMA transfer every 2 µs (500 kHz).
 *   **DMA Chaining:** A control channel automatically resets the read address, creating an infinite loop of the synthetic sine table without CPU intervention.
+
+```mermaid
+flowchart TD
+    subgraph CPU ["Main CPU Loop"]
+        Wait[Wait for DMA Transfer<br/>'BLOCKING']
+        Meta[Fill Metadata<br/>'SeqID, Timestamp']
+        CRC[Calculate Checksum]
+        USB[Send Frame via USB-CDC<br/>'Blocking fflush']
+        Reset[Reset DMA Registers &<br/>Start DMA Transfer]
+        
+        Wait --> Meta --> CRC --> USB --> Reset --> Wait
+    end
+
+    subgraph HW ["RP2040 Hardware"]
+        DMA[DMA DATA Channel]
+        DREQ[Pacing Timer<br/>'500 kHz DREQ']
+        Sin[raw_sin Table<br/>'Static RAM']
+        Buf[buf.samples<br/>'Active Buffer']
+        
+        DREQ -.-> DMA
+        DMA -- "Read" --> Sin
+        DMA -- "Write" --> Buf
+    end
+
+    Reset == "Trigger HW" ==> DMA
+    DMA == "Notify Finish" ==> Wait
+```
 
 ### 3. The Granular Telemetry Extension (`v0.2.x`)
 
