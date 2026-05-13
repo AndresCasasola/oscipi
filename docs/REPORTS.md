@@ -1,17 +1,17 @@
 # Oscipi Reports
 
-## [v0.2] Performance Analysis & Bottleneck Identification
+## v0.2 - Performance Analysis & Bottleneck Identification
 
-### **1. Experiment Overview**
+### 1. Experiment Overview
 
 * **Target:** Measure the execution time of each micro-phase within the main loop using the v0.2.4 Granular Telemetry layer.
 * **Hardware:** Raspberry Pi Pico (RP2040) @ 125 MHz.
 * **Sample Rate:** 500 kHz (2 µs per sample).
 * **Buffer Size:** 1024 samples (16-bit).
 
-### **2. Measured Data (Averages)**
+### 2. Measured Data (Averages)
 
-#### 1. Internal MCU Telemetry
+#### Internal MCU Telemetry
 
 ```mermaid
 pie
@@ -31,7 +31,7 @@ pie
 | **Total Loop Cycle** | **190,254** | **100%** |
 | *Measurement below 1 µs timer resolution. | | |
 
-#### 2. Communication Troughput
+#### Communication Channel Troughput (USB-OTG)
 
 ```mermaid
 xychart-beta
