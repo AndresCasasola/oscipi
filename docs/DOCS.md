@@ -2,23 +2,78 @@
 
 This document provides deep technical details, architectural decisions, and lab experiment measurements for each milestone of the Oscipi project.
 
+---
+
+## v0.1 - Manual CPU Sampling (Proof of Concept)
+
+The v0.1 milestone was the initial "Hello World" of the project, focusing on establishing a basic Python-to-Pico communication link.
+
+### 1. Architecture: The Sequential Super-Loop
+
+In this version, all operations were handled sequentially by the CPU in a simple loop. There was no hardware acceleration or deterministic pacing.
+
+*   **Pacing:** Attempted using software delays (`sleep_ms`).
+*   **Data Generation:** Synthetic sine wave generated on-the-fly using `sin()` math functions.
+*   **Transport:** Data was sent as binary chunks using `fwrite`.
+
+### 2. Elementary Data Structure (`adc_buffer_t`)
+
+Even in its most primitive form, the project established a strict memory layout to ensure the Python GUI could parse packets reliably. This structure remains the core of the Oscipi protocol:
+
+```c
+typedef struct {
+    // Metadata for traceability
+    uint32_t sequence_id;     // Incremental counter
+    uint32_t timestamp_us;    // MCU uptime when buffer was filled
+    
+    // System state
+    uint8_t  flags;           // Bitmask (e.g., Overflow: 0x01)
+    
+    // ADC Data (1024 samples of 12-bit data)
+    uint16_t samples[1024];   
+} adc_buffer_t;
+```
+
+### 2. Key Learnings & Failure Modes
+
+*   **Non-Determinism:** The actual throughput was ~20% lower than calculated (~0.8 FPS vs 1.0 FPS target). This was due to the hidden overhead of the USB CDC stack and the floating-point math for sine calculation.
+*   **Jitter:** The time between samples varied significantly, making the signal appear "shaky" on the GUI.
+*   **Conclusion:** Software-only timing is insufficient for oscilloscope-grade precision. Hardware peripherals (DMA/Timers) are mandatory.
+
+
 ## v0.2 - DMA (Single Buffer)
 
 The v0.2 milestone represents the transition from software-timed loops to hardware-deterministic sampling. The goal was to establish a high-speed data pipe (~500 kHz) and instrument it to identify system bottlenecks.
 
-### 1. Hardware Architecture
+### 2. Implementation: Hardware-Paced Sampling
 
-At the core of v0.2 is the **RP2040 DMA Engine**, configured to generate data independently of the CPU.
+The v0.2 transition moved the sampling responsibility to the **RP2040 DMA Engine**. 
 
-*   **Paced DMA Transfer:** A dedicated DMA Timer is claimed and configured as a Data Request (DREQ) signal. By setting the fraction to 1/250 (at 125 MHz system clock), we achieve a strictly deterministic sampling rate of **500 kHz**.
-*   **DMA Chaining (Infinite Loop):** To simulate a continuous signal, two DMA channels are chained:
-    1.  **Data Channel:** Copies 1024 samples from a pre-calculated Sine table (RAM) to the active transfer buffer.
-    2.  **Control Channel:** When the Data Channel finishes, it triggers the Control Channel, which resets the Data Channel's `read_addr` back to the start of the Sine table.
-*   **Deterministic Timing:** Unlike `sleep_us()`, the DMA-DREQ mechanism is immune to CPU interrupts or code execution jitters, ensuring a stable "timebase" for the oscilloscope.
+*   **DMA DREQ Pacing:** A hardware timer triggers the DMA transfer every 2 µs (500 kHz).
+*   **DMA Chaining:** A control channel automatically resets the read address, creating an infinite loop of the synthetic sine table without CPU intervention.
 
-### 2. Protocol & Data Framing
+### 3. The Granular Telemetry Extension (`v0.2.x`)
 
-To enable deep analysis in the Packet Inspector, a structured binary protocol was implemented:
+To debug the throughput issues discovered in v0.2, we introduced the **Telemetry Envelope**. This follows the *Open/Closed Principle*: we wrapped the existing `adc_buffer_t` without modifying its internal structure.
+
+#### Data Structure: `telemetry_frame_t`
+
+```c
+typedef struct {
+    // Performance Metrics (20 bytes)
+    uint32_t dma_us;           // Time HW DMA transfer took
+    uint32_t metadata_us;      // Time spent in CPU overhead
+    uint32_t checksum_us;      // Time spent in CRC calculation
+    uint32_t usb_transport_us; // Time blocked by USB transport
+    uint32_t total_loop_us;    // Total cycle time
+    
+    // Wrapped Original Structure
+    adc_buffer_t adc_buf; 
+} telemetry_frame_t;
+```
+
+#### Binary Frame Layout
+The data is flushed to `stdout` in the following binary order:
 
 | Size (Bytes) | Field | Description |
 |---|---|---|
@@ -49,13 +104,13 @@ fflush(stdout); // Blocking USB transport
 t_frame.usb_transport_us = time_us_32() - t_usb_start;
 ```
 
-### 4. Results & Design Identification
+### 4. Results: The "Half-Success" Discovery
 
-The telemetry data extracted in this version led to a breakthrough in understanding the RP2040's limitations:
+The telemetry data extracted in this version led to a breakthrough in understanding the RP2040's streaming limits:
 
-1.  **The USB CDC Wall:** USB transport accounts for **~99%** of the loop cycle time. While DMA takes ~2ms to fill a buffer, `fflush(stdout)` takes ~180-200ms depending on the host acknowledgement.
-2.  **Temporal Blindness:** In this single-buffer design, the DMA must be restarted *after* the USB transfer is complete. This means the system is "blind" (not sampling) during 99% of its uptime.
-3.  **Need for Double Buffering:** The v0.2 measurements proved that high-fidelity streaming requires a "Ping-Pong" architecture where the DMA fills Buffer B while the CPU handles the slow USB transport of Buffer A.
+1.  **Sampling Determinism (FIXED):** Internal jitter within the 1024-sample window was reduced to **0%**. The hardware DREQ ensures each sample is captured at exactly 2 µs intervals.
+2.  **Transport Non-Determinism (PENDING):** While sampling is perfect, the **inter-packet interval** remains highly unstable. Because the CPU must wait for the USB CDC acknowledgement (`fflush`) before restarting the DMA, any host-side latency translates directly into **Packet Jitter**.
+3.  **Temporal Blindness:** In this single-buffer design, the system is "blind" (not sampling) during 99% of its uptime. The gaps between frames are inconsistent, making it impossible to reconstruct a continuous signal over long periods.
 
 > [!IMPORTANT]
-> This version validated that the RP2040 hardware (DMA/Timer) is capable of 500 kHz sampling with 0 jitter, but the software architecture must evolve to hide the USB latency.
+> The v0.2 milestone proved that hardware pacing solves **Sampling Jitter**, but a single-buffer architecture cannot solve **Transport Jitter**. This is the primary architectural driver for the v0.3 "Ping-Pong" (Double Buffer) evolution.
