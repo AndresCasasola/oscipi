@@ -1,4 +1,4 @@
-# Oscipi
+# Oscipi About
 
 **Oscipi** is an application designed to transform a Raspberry Pi Pico into a **professional digital oscilloscope**. It is the ideal tool for engineers, makers, and students who need to visualize electrical signals in real-time with a level of precision and fluidity that entry-level solutions simply cannot provide.
 
