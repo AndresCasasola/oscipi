@@ -9,6 +9,7 @@ import os
 import json
 from PyQt5 import QtWidgets, QtCore, QtGui
 import pyqtgraph as pg
+import pyqtgraph.exporters
 import psutil
 from theme import get_stylesheet
 
@@ -39,6 +40,7 @@ class DataSource(QtCore.QThread):
     """Base interface for data sources"""
     new_data_signal = QtCore.pyqtSignal(dict)
     error_signal = QtCore.pyqtSignal(str)
+    throughput_signal = QtCore.pyqtSignal(dict)
     
     def __init__(self):
         super().__init__()
@@ -51,28 +53,53 @@ class MockPicoSource(DataSource):
     """Simulator: Generates a sine wave with noise for hardware-less testing"""
     def run(self):
         phase = 0.0
+        frames_total = 0
+        bytes_total = 0
+        frames_in_period = 0
+        bytes_in_period = 0
+        start_perf_time = time.time()
+        bytes_per_frame = 34 + SAMPLES_PER_BUFFER * 2
+
         while self.running:
-            # Generate time and wave
             t = np.linspace(phase, phase + 2*np.pi, SAMPLES_PER_BUFFER)
-            
-            # 2048 is the ADC center (3.3V / 2), 1500 is the amplitude
             noise = np.random.normal(0, 15, SAMPLES_PER_BUFFER)
             samples = (2048 + 1500 * np.sin(t) + noise).astype(np.uint16)
-            
-            # Clip to ensure it doesn't exceed the ADC range
             samples = np.clip(samples, 0, ADC_MAX_VAL)
-            
+
             packet = {
                 'seq': int(phase * 10),
                 'time': int(time.time() * 1e6),
                 'flags': 0,
                 'crc': 0xABCD,
-                'samples': samples
+                'samples': samples,
+                'telemetry': {
+                    'dma_us': 2048, 'metadata_us': 0,
+                    'checksum_us': 0, 'usb_transport_us': 18000, 'total_loop_us': 20048
+                }
             }
             self.new_data_signal.emit(packet)
-            
-            phase += 0.1 # Wave movement speed
-            time.sleep(0.02) # ~50 FPS for total smoothness
+
+            frames_total += 1
+            frames_in_period += 1
+            bytes_total += bytes_per_frame
+            bytes_in_period += bytes_per_frame
+
+            current_time = time.time()
+            if current_time - start_perf_time >= 1.0:
+                elapsed = current_time - start_perf_time
+                self.throughput_signal.emit({
+                    'kbps': (bytes_in_period / 1024) / elapsed,
+                    'fps': frames_in_period / elapsed,
+                    'total_frames': frames_total,
+                    'total_bytes': bytes_total,
+                    'crc_errors': 0,
+                })
+                frames_in_period = 0
+                bytes_in_period = 0
+                start_perf_time = current_time
+
+            phase += 0.1
+            time.sleep(0.02)
 
 class TCPSerialWrapper:
     """Mocks a pyserial Serial object but uses a TCP socket internally."""
@@ -114,10 +141,14 @@ class SerialPicoSource(DataSource):
 
     def run(self):
         # Performance monitoring variables
-        bytes_received_total = 0
-        frames_received_total = 0
+        bytes_in_period = 0
+        frames_in_period = 0
+        bytes_total = 0
+        frames_total = 0
+        crc_errors_total = 0
         first_frame_seen = False
         start_perf_time = time.time()
+        bytes_per_frame = 34 + SAMPLES_PER_BUFFER * 2
         
         try:
             if self.port.startswith("tcp:"):
@@ -181,24 +212,30 @@ class SerialPicoSource(DataSource):
                                     }
                                 }
                                 self.new_data_signal.emit(packet)
-                                bytes_received_total += (34 + SAMPLES_PER_BUFFER * 2)
-                                frames_received_total += 1
-                                
+                                bytes_in_period += bytes_per_frame
+                                bytes_total += bytes_per_frame
+                                frames_in_period += 1
+                                frames_total += 1
+
                                 if not first_frame_seen:
                                     print("--- FIRST VALID FRAME RECEIVED SUCCESSFULLY! ---")
                                     first_frame_seen = True
                             else:
-                                print(f"CRC Error! Frame {seq_id}")
+                                crc_errors_total += 1
 
                     # --- Performance Reporting ---
                     current_time = time.time()
                     if current_time - start_perf_time >= 1.0:
                         elapsed = current_time - start_perf_time
-                        kbps = (bytes_received_total / 1024) / elapsed
-                        fps = frames_received_total / elapsed
-                        print(f"| [THROUGHPUT] {kbps:>7.2f} KB/s | [FPS] {fps:>5.1f} frames/s |")
-                        bytes_received_total = 0
-                        frames_received_total = 0
+                        self.throughput_signal.emit({
+                            'kbps': (bytes_in_period / 1024) / elapsed,
+                            'fps': frames_in_period / elapsed,
+                            'total_frames': frames_total,
+                            'total_bytes': bytes_total,
+                            'crc_errors': crc_errors_total,
+                        })
+                        bytes_in_period = 0
+                        frames_in_period = 0
                         start_perf_time = current_time
 
         except Exception as e:
@@ -325,6 +362,18 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         self.hist_head = 0
         self.hist_count = 0
         print("RAM Allocation complete.")
+
+        # Throughput history (rolling, max 120 s)
+        self.thr_fps_history = []
+        self.thr_kbps_history = []
+        self.thr_min_fps = float('inf')
+        self.thr_max_fps = 0.0
+        self.thr_sum_fps = 0.0
+        self.thr_sum_kbps = 0.0
+        self.thr_sample_count = 0
+        self.thr_total_frames = 0
+        self.thr_total_bytes = 0
+        self.thr_crc_errors = 0
 
     def setup_osc_tab(self):
         osc_tab = QtWidgets.QWidget()
@@ -544,6 +593,38 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         tel_layout = QtWidgets.QVBoxLayout(tel_tab)
         tel_layout.setContentsMargins(4, 4, 4, 4)
 
+        # Telemetry Header with Export Buttons
+        tel_header_layout = QtWidgets.QHBoxLayout()
+        tel_header_label = QtWidgets.QLabel("TELEMETRY METRICS")
+        tel_header_label.setStyleSheet("color: #72C748; font-size: 10px; font-weight: bold; letter-spacing: 1px;")
+        tel_header_layout.addWidget(tel_header_label)
+        tel_header_layout.addStretch()
+
+        _ss_blue = ("QPushButton { background-color: #0d2040; color: #3D8EFF; border: 1px solid #2a5aaa; "
+                    "border-radius: 6px; padding: 4px 10px; font-size: 11px; font-weight: bold; } "
+                    "QPushButton:hover { background-color: #1a3a6a; border-color: #3D8EFF; color: #6db3ff; } "
+                    "QPushButton:pressed { background-color: #0a1a30; }")
+
+        self.export_tel_table_btn = QtWidgets.QPushButton("↓  Table")
+        self.export_tel_table_btn.setFixedSize(90, 28)
+        self.export_tel_table_btn.setStyleSheet(_ss_blue)
+        self.export_tel_table_btn.clicked.connect(self.export_telemetry_table)
+        tel_header_layout.addWidget(self.export_tel_table_btn)
+
+        self.export_tel_graph_btn = QtWidgets.QPushButton("↓  Graph PNG")
+        self.export_tel_graph_btn.setFixedSize(105, 28)
+        self.export_tel_graph_btn.setStyleSheet(_ss_blue)
+        self.export_tel_graph_btn.clicked.connect(self.export_telemetry_graph)
+        tel_header_layout.addWidget(self.export_tel_graph_btn)
+
+        self.export_tel_mermaid_btn = QtWidgets.QPushButton("↓  Mermaid Pie")
+        self.export_tel_mermaid_btn.setFixedSize(110, 28)
+        self.export_tel_mermaid_btn.setStyleSheet(_ss_blue)
+        self.export_tel_mermaid_btn.clicked.connect(self.export_telemetry_mermaid)
+        tel_header_layout.addWidget(self.export_tel_mermaid_btn)
+
+        tel_layout.addLayout(tel_header_layout)
+
         self.tel_text = QtWidgets.QTextEdit()
         self.tel_text.setReadOnly(True)
         self.tel_text.setMaximumHeight(170)
@@ -567,7 +648,8 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         tel_layout.addWidget(self.tel_bar_plot)
 
         detail_tabs.addTab(tel_tab, "Telemetry")
-        detail_tabs.setCurrentIndex(1) # Telemetry is more important for analysis by default
+        detail_tabs.setCurrentIndex(1)
+        self.setup_throughput_subtab(detail_tabs)
 
         splitter.addWidget(detail_tabs)
         splitter.setSizes([400, 600])
@@ -575,6 +657,104 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         main_layout.addWidget(splitter)
         
         self.tabs.addTab(ins_tab, "Packet Inspector")
+
+    def setup_throughput_subtab(self, detail_tabs):
+        """Builds the Throughput channel statistics sub-tab."""
+        thr_tab = QtWidgets.QWidget()
+        thr_layout = QtWidgets.QVBoxLayout(thr_tab)
+        thr_layout.setContentsMargins(4, 6, 4, 4)
+        thr_layout.setSpacing(6)
+
+        # --- Header ---
+        hdr = QtWidgets.QHBoxLayout()
+        hdr_lbl = QtWidgets.QLabel("CHANNEL THROUGHPUT")
+        hdr_lbl.setStyleSheet("color: #FF9500; font-size: 10px; font-weight: bold; letter-spacing: 1px;")
+        hdr.addWidget(hdr_lbl)
+        hdr.addStretch()
+
+        _ss_orange = ("QPushButton { background-color: #201500; color: #FF9500; border: 1px solid #7a4500; "
+                      "border-radius: 6px; padding: 4px 10px; font-size: 11px; font-weight: bold; } "
+                      "QPushButton:hover { background-color: #3a2500; border-color: #FF9500; color: #ffb84d; } "
+                      "QPushButton:pressed { background-color: #100a00; }")
+
+        self.export_thr_table_btn = QtWidgets.QPushButton("↓  Table")
+        self.export_thr_table_btn.setFixedSize(90, 28)
+        self.export_thr_table_btn.setStyleSheet(_ss_orange)
+        self.export_thr_table_btn.clicked.connect(self.export_throughput_table)
+        hdr.addWidget(self.export_thr_table_btn)
+
+        self.export_thr_png_btn = QtWidgets.QPushButton("↓  PNG")
+        self.export_thr_png_btn.setFixedSize(80, 28)
+        self.export_thr_png_btn.setStyleSheet(_ss_orange)
+        self.export_thr_png_btn.clicked.connect(self.export_throughput_png)
+        hdr.addWidget(self.export_thr_png_btn)
+
+        self.export_thr_mermaid_btn = QtWidgets.QPushButton("↓  Mermaid Chart")
+        self.export_thr_mermaid_btn.setFixedSize(120, 28)
+        self.export_thr_mermaid_btn.setStyleSheet(_ss_orange)
+        self.export_thr_mermaid_btn.clicked.connect(self.export_throughput_mermaid)
+        hdr.addWidget(self.export_thr_mermaid_btn)
+
+        thr_layout.addLayout(hdr)
+
+        # --- Stat Cards ---
+        cards_layout = QtWidgets.QHBoxLayout()
+        cards_layout.setSpacing(5)
+        card_style = """
+            QFrame {
+                background-color: #080812;
+                border: 1px solid #1a1a30;
+                border-radius: 6px;
+            }
+        """
+
+        def make_card(title, attr, color, unit):
+            frame = QtWidgets.QFrame()
+            frame.setStyleSheet(card_style)
+            vbox = QtWidgets.QVBoxLayout(frame)
+            vbox.setContentsMargins(8, 6, 8, 4)
+            vbox.setSpacing(1)
+            t = QtWidgets.QLabel(title)
+            t.setStyleSheet("color: #444; font-size: 9px; font-weight: bold; letter-spacing: 1px;")
+            t.setAlignment(QtCore.Qt.AlignCenter)
+            v = QtWidgets.QLabel("—")
+            v.setStyleSheet(f"color: {color}; font-size: 18px; font-weight: bold; font-family: monospace;")
+            v.setAlignment(QtCore.Qt.AlignCenter)
+            u = QtWidgets.QLabel(unit)
+            u.setStyleSheet("color: #333; font-size: 9px;")
+            u.setAlignment(QtCore.Qt.AlignCenter)
+            vbox.addWidget(t)
+            vbox.addWidget(v)
+            vbox.addWidget(u)
+            setattr(self, attr, v)
+            return frame
+
+        cards_layout.addWidget(make_card("LIVE KB/S",  "thr_lbl_kbps",  "#FF9500", "KB/s"))
+        cards_layout.addWidget(make_card("LIVE FPS",   "thr_lbl_fps",   "#3DD6F5", "fps"))
+        cards_layout.addWidget(make_card("AVG FPS",    "thr_lbl_avg",   "#72C748", "fps"))
+        cards_layout.addWidget(make_card("MIN FPS",    "thr_lbl_min",   "#BB86FC", "fps"))
+        cards_layout.addWidget(make_card("MAX FPS",    "thr_lbl_max",   "#FF4C4C", "fps"))
+        thr_layout.addLayout(cards_layout)
+
+        # --- Summary row ---
+        self.thr_summary_lbl = QtWidgets.QLabel("Waiting for data...")
+        self.thr_summary_lbl.setStyleSheet("color: #444; font-size: 11px; font-family: monospace; padding: 0 2px;")
+        thr_layout.addWidget(self.thr_summary_lbl)
+
+        # --- Real-time graph ---
+        self.thr_plot = pg.PlotWidget()
+        self.thr_plot.setBackground('#0d0d1a')
+        self.thr_plot.showGrid(x=True, y=True, alpha=0.15)
+        self.thr_plot.setMouseEnabled(x=False, y=False)
+        self.thr_plot.setLabel('left', 'Frame Rate', units='fps')
+        self.thr_plot.setLabel('bottom', 'Time', units='s')
+        self.thr_plot.addLegend(offset=(5, 5))
+        self.thr_fps_curve  = self.thr_plot.plot(pen=pg.mkPen('#3DD6F5', width=1.5), name='FPS')
+        self.thr_kbps_curve = self.thr_plot.plot(pen=pg.mkPen('#FF9500', width=1.5,
+                                                  style=QtCore.Qt.DashLine), name='KB/s (/10)')
+        thr_layout.addWidget(self.thr_plot)
+
+        detail_tabs.addTab(thr_tab, "Throughput")
 
     def apply_ram_config(self):
         self.config['ram_limit_gb'] = self.ram_spin.value()
@@ -846,6 +1026,270 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         for bar_item, h in zip(self.tel_bar_items, heights):
             bar_item.setOpts(height=h)
 
+    def on_throughput_update(self, data):
+        """Receives a throughput signal every second and refreshes the Throughput tab."""
+        kbps = data['kbps']
+        fps  = data['fps']
+        self.thr_total_frames = data['total_frames']
+        self.thr_total_bytes  = data['total_bytes']
+        self.thr_crc_errors   = data['crc_errors']
+
+        # Accumulate stats
+        self.thr_fps_history.append(fps)
+        self.thr_kbps_history.append(kbps)
+        if len(self.thr_fps_history) > 120:
+            self.thr_fps_history.pop(0)
+            self.thr_kbps_history.pop(0)
+
+        self.thr_sum_fps  += fps
+        self.thr_sum_kbps += kbps
+        self.thr_sample_count += 1
+        if fps < self.thr_min_fps: self.thr_min_fps = fps
+        if fps > self.thr_max_fps: self.thr_max_fps = fps
+
+        avg_fps = self.thr_sum_fps / self.thr_sample_count
+
+        # Update stat cards
+        self.thr_lbl_kbps.setText(f"{kbps:.1f}")
+        self.thr_lbl_fps.setText(f"{fps:.1f}")
+        self.thr_lbl_avg.setText(f"{avg_fps:.1f}")
+        min_txt = f"{self.thr_min_fps:.1f}" if self.thr_min_fps != float('inf') else "—"
+        self.thr_lbl_min.setText(min_txt)
+        self.thr_lbl_max.setText(f"{self.thr_max_fps:.1f}")
+
+        # Update summary
+        total_mb = self.thr_total_bytes / (1024 * 1024)
+        err_pct  = (self.thr_crc_errors / max(1, self.thr_total_frames + self.thr_crc_errors)) * 100
+        eff_sps  = avg_fps * SAMPLES_PER_BUFFER
+        self.thr_summary_lbl.setText(
+            f"Frames: {self.thr_total_frames:,}  |  "
+            f"Data: {total_mb:.2f} MB  |  "
+            f"CRC Errors: {self.thr_crc_errors} ({err_pct:.2f}%)  |  "
+            f"Eff. Sample Rate: {eff_sps:,.0f} S/s"
+        )
+
+        # Update graph (x = seconds ago, y = fps and kbps/10 normalized)
+        n = len(self.thr_fps_history)
+        x = list(range(-n + 1, 1))
+        self.thr_fps_curve.setData(x, self.thr_fps_history)
+        kbps_norm = [v / 10 for v in self.thr_kbps_history]
+        self.thr_kbps_curve.setData(x, kbps_norm)
+
+    # -- Shared helpers -------------------------------------------------------
+
+    def _tel_averages(self):
+        import numpy as np
+        count = max(1, self.hist_count)
+        return (int(np.mean(self.hist_tel_dma[:count])),
+                int(np.mean(self.hist_tel_meta[:count])),
+                int(np.mean(self.hist_tel_chk[:count])),
+                int(np.mean(self.hist_tel_usb[:count])),
+                int(np.mean(self.hist_tel_loop[:count])))
+
+    def _thr_averages(self):
+        avg_fps  = self.thr_sum_fps  / self.thr_sample_count
+        avg_kbps = self.thr_sum_kbps / self.thr_sample_count
+        total_mb = self.thr_total_bytes / (1024 * 1024)
+        err_pct  = (self.thr_crc_errors / max(1, self.thr_total_frames + self.thr_crc_errors)) * 100
+        min_str  = f"{self.thr_min_fps:.2f}" if self.thr_min_fps != float("inf") else "N/A"
+        return avg_fps, avg_kbps, total_mb, err_pct, min_str
+
+    def _flash_btn(self, btn, reset_fn):
+        btn.setStyleSheet(
+            "QPushButton { background-color: #0d2a1a; color: #72C748; border: 1px solid #72C748; "
+            "border-radius: 6px; padding: 4px 10px; font-size: 11px; font-weight: bold; }")
+        QtCore.QTimer.singleShot(2000, reset_fn)
+
+    # -- Telemetry: Table -----------------------------------------------------
+
+    def export_telemetry_table(self):
+        """Copies the telemetry averages as a markdown table to clipboard."""
+        if self.hist_count == 0:
+            QtWidgets.QMessageBox.warning(self, "Export Failed", "No telemetry data captured yet.")
+            return
+        t_dma, t_meta, t_chk, t_usb, t_loop = self._tel_averages()
+        meta_val = f"{t_meta:,}" if t_meta > 0 else "0*"
+        chk_val  = f"{t_chk:,}"  if t_chk  > 0 else "0*"
+        rows = [
+            "| Phase | Duration (\u00b5s) | Duty Cycle (%) |",
+            "| --- | --- | --- |",
+            f"| **DMA Hardware Transfer** | {t_dma:,} | {t_dma/max(1,t_loop)*100:.1f}% |",
+            f"| **Metadata Handling** | {meta_val} | {t_meta/max(1,t_loop)*100:.1f}% |",
+            f"| **Checksum Calculation (XOR)** | {chk_val} | {t_chk/max(1,t_loop)*100:.1f}% |",
+            f"| **USB CDC Transport** | {t_usb:,} | {t_usb/max(1,t_loop)*100:.1f}% |",
+            f"| **Total Loop Cycle** | **{t_loop:,}** | **100%** |",
+        ]
+        if t_meta == 0 or t_chk == 0:
+            rows.append("| *Measurement below 1 \u00b5s timer resolution. | | |")
+        QtWidgets.QApplication.clipboard().setText("\n".join(rows))
+        self.export_tel_table_btn.setText("\u2713  Copied!")
+        self._flash_btn(self.export_tel_table_btn, self._reset_tel_table_btn)
+
+    def _reset_tel_table_btn(self):
+        self.export_tel_table_btn.setText("\u2193  Table")
+        self.export_tel_table_btn.setStyleSheet(
+            "QPushButton { background-color: #0d2040; color: #3D8EFF; border: 1px solid #2a5aaa; "
+            "border-radius: 6px; padding: 4px 10px; font-size: 11px; font-weight: bold; } "
+            "QPushButton:hover { background-color: #1a3a6a; border-color: #3D8EFF; color: #6db3ff; } "
+            "QPushButton:pressed { background-color: #0a1a30; }")
+
+    # -- Telemetry: Graph PNG -------------------------------------------------
+
+    def export_telemetry_graph(self):
+        """Saves the telemetry bar chart as a PNG."""
+        if self.hist_count == 0:
+            QtWidgets.QMessageBox.warning(self, "Export Failed", "No telemetry data captured yet.")
+            return
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        docs_exports = os.path.join(os.path.dirname(os.path.dirname(__file__)), "docs", "exports")
+        os.makedirs(docs_exports, exist_ok=True)
+        img_path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Save Telemetry Graph",
+            os.path.join(docs_exports, f"telemetry_{timestamp}.png"), "PNG Image (*.png)")
+        if not img_path:
+            return
+        exp = pyqtgraph.exporters.ImageExporter(self.tel_bar_plot.plotItem)
+        exp.parameters()["width"] = 1280
+        exp.export(img_path)
+        self.export_tel_graph_btn.setText("\u2713  Saved!")
+        self._flash_btn(self.export_tel_graph_btn, self._reset_tel_graph_btn)
+
+    def _reset_tel_graph_btn(self):
+        self.export_tel_graph_btn.setText("\u2193  Graph PNG")
+        self.export_tel_graph_btn.setStyleSheet(
+            "QPushButton { background-color: #0d2040; color: #3D8EFF; border: 1px solid #2a5aaa; "
+            "border-radius: 6px; padding: 4px 10px; font-size: 11px; font-weight: bold; } "
+            "QPushButton:hover { background-color: #1a3a6a; border-color: #3D8EFF; color: #6db3ff; } "
+            "QPushButton:pressed { background-color: #0a1a30; }")
+
+    # -- Telemetry: Mermaid ---------------------------------------------------
+
+    def export_telemetry_mermaid(self):
+        """Copies a Mermaid pie chart of MCU phase distribution to clipboard."""
+        if self.hist_count == 0:
+            QtWidgets.QMessageBox.warning(self, "Export Failed", "No telemetry data captured yet.")
+            return
+        t_dma, t_meta, t_chk, t_usb, _ = self._tel_averages()
+        pie = "\n".join([
+            "```mermaid",
+            "pie",
+            '    title "MCU Phase Distribution (avg)"',
+            f'    "DMA Transfer" : {t_dma}',
+            f'    "Metadata" : {max(1, t_meta)}',
+            f'    "Checksum" : {max(1, t_chk)}',
+            f'    "USB Transport" : {t_usb}',
+            "```",
+        ])
+        QtWidgets.QApplication.clipboard().setText(pie)
+        self.export_tel_mermaid_btn.setText("\u2713  Copied!")
+        self._flash_btn(self.export_tel_mermaid_btn, self._reset_tel_mermaid_btn)
+
+    def _reset_tel_mermaid_btn(self):
+        self.export_tel_mermaid_btn.setText("\u2193  Mermaid Pie")
+        self.export_tel_mermaid_btn.setStyleSheet(
+            "QPushButton { background-color: #0d2040; color: #3D8EFF; border: 1px solid #2a5aaa; "
+            "border-radius: 6px; padding: 4px 10px; font-size: 11px; font-weight: bold; } "
+            "QPushButton:hover { background-color: #1a3a6a; border-color: #3D8EFF; color: #6db3ff; } "
+            "QPushButton:pressed { background-color: #0a1a30; }")
+
+    # -- Throughput: Table ----------------------------------------------------
+
+    def export_throughput_table(self):
+        """Copies the throughput session stats as a markdown table to clipboard."""
+        if self.thr_sample_count == 0:
+            QtWidgets.QMessageBox.warning(self, "Export Failed", "No throughput data captured yet.")
+            return
+        avg_fps, avg_kbps, total_mb, err_pct, min_str = self._thr_averages()
+        eff_sps = avg_fps * SAMPLES_PER_BUFFER
+        rows = [
+            "| Metric | Value |", "| --- | --- |",
+            f"| **Avg. Throughput** | {avg_kbps:.2f} KB/s |",
+            f"| **Avg. Frame Rate** | {avg_fps:.2f} FPS |",
+            f"| **Min Frame Rate** | {min_str} FPS |",
+            f"| **Max Frame Rate** | {self.thr_max_fps:.2f} FPS |",
+            f"| **Total Frames** | {self.thr_total_frames:,} |",
+            f"| **Total Data** | {total_mb:.2f} MB |",
+            f"| **CRC Errors** | {self.thr_crc_errors} ({err_pct:.2f}%) |",
+            f"| **Effective Sample Rate** | {eff_sps:,.0f} S/s |",
+        ]
+        QtWidgets.QApplication.clipboard().setText("\n".join(rows))
+        self.export_thr_table_btn.setText("\u2713  Copied!")
+        self._flash_btn(self.export_thr_table_btn, self._reset_thr_table_btn)
+
+    def _reset_thr_table_btn(self):
+        self.export_thr_table_btn.setText("\u2193  Table")
+        self.export_thr_table_btn.setStyleSheet(
+            "QPushButton { background-color: #201500; color: #FF9500; border: 1px solid #7a4500; "
+            "border-radius: 6px; padding: 4px 10px; font-size: 11px; font-weight: bold; } "
+            "QPushButton:hover { background-color: #3a2500; border-color: #FF9500; color: #ffb84d; } "
+            "QPushButton:pressed { background-color: #100a00; }")
+
+    # -- Throughput: PNG ------------------------------------------------------
+
+    def export_throughput_png(self):
+        """Saves the throughput line chart as a PNG."""
+        if self.thr_sample_count == 0:
+            QtWidgets.QMessageBox.warning(self, "Export Failed", "No throughput data captured yet.")
+            return
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        docs_exports = os.path.join(os.path.dirname(os.path.dirname(__file__)), "docs", "exports")
+        os.makedirs(docs_exports, exist_ok=True)
+        img_path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Save Throughput Graph",
+            os.path.join(docs_exports, f"throughput_{timestamp}.png"), "PNG Image (*.png)")
+        if not img_path:
+            return
+        exp = pyqtgraph.exporters.ImageExporter(self.thr_plot.plotItem)
+        exp.parameters()["width"] = 1280
+        exp.export(img_path)
+        self.export_thr_png_btn.setText("\u2713  Saved!")
+        self._flash_btn(self.export_thr_png_btn, self._reset_thr_png_btn)
+
+    def _reset_thr_png_btn(self):
+        self.export_thr_png_btn.setText("\u2193  PNG")
+        self.export_thr_png_btn.setStyleSheet(
+            "QPushButton { background-color: #201500; color: #FF9500; border: 1px solid #7a4500; "
+            "border-radius: 6px; padding: 4px 10px; font-size: 11px; font-weight: bold; } "
+            "QPushButton:hover { background-color: #3a2500; border-color: #FF9500; color: #ffb84d; } "
+            "QPushButton:pressed { background-color: #100a00; }")
+
+    # -- Throughput: Mermaid --------------------------------------------------
+
+    def export_throughput_mermaid(self):
+        """Copies a Mermaid xychart-beta of FPS and KB/s history to clipboard."""
+        if not self.thr_fps_history:
+            QtWidgets.QMessageBox.warning(self, "Export Failed", "No throughput data captured yet.")
+            return
+        fps_data  = self.thr_fps_history[-30:]
+        kbps_data = self.thr_kbps_history[-30:]
+        n = len(fps_data)
+        x_labels = ", ".join(f'"{-(n-1-i)}s"' for i in range(n))
+        fps_vals  = ", ".join(f"{v:.1f}" for v in fps_data)
+        kbps_vals = ", ".join(f"{v:.1f}" for v in kbps_data)
+        y_max = max(10, int(max(max(fps_data), max(kbps_data)) * 1.4))
+
+        chart = "\n".join([
+            "```mermaid",
+            "xychart-beta",
+            f'    title "Channel Throughput (last {n}s)"',
+            f"    x-axis [{x_labels}]",
+            f'    y-axis "Metrics (FPS & KB/s)" 0 --> {y_max}',
+            f"    line [{fps_vals}]",
+            f"    line [{kbps_vals}]",
+            "```",
+        ])
+        QtWidgets.QApplication.clipboard().setText(chart)
+        self.export_thr_mermaid_btn.setText("\u2713  Copied!")
+        self._flash_btn(self.export_thr_mermaid_btn, self._reset_thr_mermaid_btn)
+
+    def _reset_thr_mermaid_btn(self):
+        self.export_thr_mermaid_btn.setText("\u2193  Mermaid Chart")
+        self.export_thr_mermaid_btn.setStyleSheet(
+            "QPushButton { background-color: #201500; color: #FF9500; border: 1px solid #7a4500; "
+            "border-radius: 6px; padding: 4px 10px; font-size: 11px; font-weight: bold; } "
+            "QPushButton:hover { background-color: #3a2500; border-color: #FF9500; color: #ffb84d; } "
+            "QPushButton:pressed { background-color: #100a00; }")
+
     def update_timebase(self, value):
         """Updates the X-axis range to zoom into the latest samples on the right side of the screen."""
         total_samples = SAMPLES_PER_BUFFER * DISPLAY_CHUNKS
@@ -913,6 +1357,7 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
             self.data_source.streaming = False   # Start in idle mode
             self.data_source.new_data_signal.connect(self.update_plot)
             self.data_source.error_signal.connect(self.handle_source_error)
+            self.data_source.throughput_signal.connect(self.on_throughput_update)
             self.data_source.start()
             self.connect_btn.setText("Disconnect")
             self.port_combo.setEnabled(False)
@@ -967,6 +1412,7 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         """Starts the mock source for testing without hardware"""
         self.data_source = MockPicoSource()
         self.data_source.new_data_signal.connect(self.update_plot)
+        self.data_source.throughput_signal.connect(self.on_throughput_update)
         self.data_source.start()
         self._set_conn_status('streaming')
 
