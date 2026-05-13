@@ -1,58 +1,61 @@
-# Engineering & Architecture Notes
+# Oscipi Docs
 
 This document provides deep technical details, architectural decisions, and lab experiment measurements for each milestone of the Oscipi project.
 
----
+## v0.2 - DMA (Single Buffer)
 
-## Hardware Architecture Evolution
+The v0.2 milestone represents the transition from software-timed loops to hardware-deterministic sampling. The goal was to establish a high-speed data pipe (~500 kHz) and instrument it to identify system bottlenecks.
 
-### v0.1: Manual CPU Sampling
-- **Context:** Initial proof of concept loop using `sleep_ms(1)` in software.
-- **Data & Observations:** Real throughput was 0.8 FPS instead of the expected 1.0 FPS. Generating 1024 samples took ~1250ms.
-- **Discovery:** Software timing is non-deterministic. CPU overhead and USB buffering added ~250ms of delay per frame. This approach resulted in high jitter and severe "phase jumps" in the signal.
-- **Resolution:** Required moving all strict timing responsibilities to hardware peripherals (Timer and DMA).
+### 1. Hardware Architecture
 
-### v0.2: DMA (Single Buffer)
-- **Context:** DMA hardware-paced sampling driven by DREQ, featuring a custom Telemetry instrumentation envelope.
-- **Hypothesis (USB CDC Transport Bottleneck):** USB ACK latency is actively blocking the main execution loop.
-- **Measurements:**
-  - DMA Sampling time: 2,048 µs
-  - Checksum calculation: 15 µs
-  - USB Write/Flush overhead: 185,000 µs
-- **Conclusion:** Single buffering is entirely ineffective for high-speed streaming. The DMA hardware had to be halted during USB transmission, resulting in 99% idle time and massive gaps in the signal continuity.
+At the core of v0.2 is the **RP2040 DMA Engine**, configured to generate data independently of the CPU.
 
-### v0.3: DMA (Double Buffering)
-- **Design Challenge:** Eliminate the massive USB write gap discovered in v0.2.
-- **Architecture:** Implemented a Ping-Pong buffer system. Buffer A is filled by the DMA asynchronously while the CPU computes checksums and flushes Buffer B over USB.
-- **Mechanism:** Cross-triggering DMA channels handle the buffer swapping automatically at the hardware level.
-- **Scalability Issues:** Managing complex hardware states and synchronization flags in bare-metal C leads to brittle code when attempting to add more features.
+*   **Paced DMA Transfer:** A dedicated DMA Timer is claimed and configured as a Data Request (DREQ) signal. By setting the fraction to 1/250 (at 125 MHz system clock), we achieve a strictly deterministic sampling rate of **500 kHz**.
+*   **DMA Chaining (Infinite Loop):** To simulate a continuous signal, two DMA channels are chained:
+    1.  **Data Channel:** Copies 1024 samples from a pre-calculated Sine table (RAM) to the active transfer buffer.
+    2.  **Control Channel:** When the Data Channel finishes, it triggers the Control Channel, which resets the Data Channel's `read_addr` back to the start of the Sine table.
+*   **Deterministic Timing:** Unlike `sleep_us()`, the DMA-DREQ mechanism is immune to CPU interrupts or code execution jitters, ensuring a stable "timebase" for the oscilloscope.
 
-### v0.4: ADC Streaming
-- **Design Challenge:** Transition from synthetic data to real physical signals.
-- **Architecture:** Replaced the synthetic software sine wave generator with direct RP2040 internal ADC sampling.
-- **Implementation:** The ADC captures data and feeds it directly to the DMA channels with a paced Timer, ensuring high-speed streaming without jitter and no signal gaps.
+### 2. Protocol & Data Framing
 
-### v0.5: RTOS Multi-Tasking
-- **Design Challenge:** Managing ADC, DMA, and USB concurrently became too complex for a single sequential super-loop.
-- **Architecture:** Complete transition to FreeRTOS.
-- **Mechanism:** 
-  - Uses preemptive scheduling with dedicated task priorities (e.g., high priority for DMA/ADC management, lower priority for USB transport).
-  - Implements thread-safe primitives like Task Notifications and Semaphores to safely hand over buffer ownership between the hardware interrupt routines and the application software logic.
+To enable deep analysis in the Packet Inspector, a structured binary protocol was implemented:
 
-### v0.6: Command Console
-- **Design Challenge:** The device was purely passive, constantly streaming data without the ability to be configured by the host.
-- **Architecture:** Implementation of a bi-directional protocol over USB.
-- **Mechanism:** Added a dedicated parsing task to receive and execute control packets from the GUI. This enables on-the-fly configuration of sampling rates, triggers, and active channels without requiring a hardware reset.
+| Size (Bytes) | Field | Description |
+|---|---|---|
+| 2 | **Header** | `0xAA 0x55` for frame synchronization. |
+| 20 | **Telemetry Envelope** | 5x `uint32_t` measuring µs for: DMA wait, Metadata, Checksum, USB Tx, and Total Loop. |
+| 4 | **Sequence ID** | Monotonically increasing counter to detect dropped frames. |
+| 4 | **Timestamp** | MCU uptime in microseconds when the frame was processed. |
+| 2 | **Flags** | Status bits (padding/future use). |
+| 2048 | **Samples** | 1024 samples of 16-bit data (raw ADC values). |
+| 2 | **Checksum** | 16-bit XOR result of metadata and samples. |
 
----
+### 3. Granular Telemetry Strategy
 
-## Software Interface Evolution
+One of the most critical features of v0.2 is the **Micro-Phase Instrumentation**. By wrapping each logic block in `time_us_32()` calls, the firmware reports its internal state back to the GUI:
 
-### Minor v0.1.1: Python/Qt Interface Architecture
-- **Context:** Initial development of the desktop companion software (`gui.py` and `hw_emulator.py`) using PyQt5 and pyqtgraph.
-- **Challenge 1 (Performance & Memory):** The default `QTableWidget` and Python native lists completely crashed the UI when attempting to load hundreds of thousands of data packets for the Packet Inspector.
-- **Solution 1 (Pre-allocated Circular Buffers):** Migrated to massive Numpy pre-allocated arrays based on a user-defined RAM limit (e.g., 1GB = ~500,000 packets). This guarantees zero garbage collection spikes and strict, predictable RAM boundaries. The memory is managed as an infinite circular buffer.
-- **Solution 2 (Model-View Separation):** Injected the Numpy arrays directly into a custom, highly-optimized `QAbstractTableModel`. This completely decouples the UI rendering from the massive data model. The UI only requests data for the rows physically visible on the screen, allowing instant, zero-latency scrolling through gigabytes of data.
-- **Challenge 2 (Windows Rendering Artifacts):** Native Windows rendering injected white lines and inconsistent borders into dark-themed dropdown menus (`QComboBox`), breaking the aesthetic.
-- **Solution 2 (Styled Delegates):** Forced PyQt to abandon the native OS rendering by applying `setItemDelegate(QtWidgets.QStyledItemDelegate())` to comboboxes, giving full control back to the custom CSS styling engine.
-- **Outcome:** A completely stable, 60 FPS real-time oscilloscope that can pre-allocate gigabytes of RAM for packet history without freezing. It ensures 0 dropped frames during analysis, handles UART connection drops gracefully via custom PyQt signals, and maintains a fully customized professional "Dark/Neon" aesthetic.
+```c
+// Example of instrumentation loop
+t_frame.total_loop_us = time_us_32() - t_start_loop;
+t_start_loop = time_us_32();
+
+dma_channel_wait_for_finish_blocking(chan_data); // Wait for HW
+t_frame.dma_us = time_us_32() - t_dma_start;
+
+// ... calculate checksum and metadata ...
+
+fwrite(header, 1, HEADER_SIZE, stdout);
+fflush(stdout); // Blocking USB transport
+t_frame.usb_transport_us = time_us_32() - t_usb_start;
+```
+
+### 4. Results & Design Identification
+
+The telemetry data extracted in this version led to a breakthrough in understanding the RP2040's limitations:
+
+1.  **The USB CDC Wall:** USB transport accounts for **~99%** of the loop cycle time. While DMA takes ~2ms to fill a buffer, `fflush(stdout)` takes ~180-200ms depending on the host acknowledgement.
+2.  **Temporal Blindness:** In this single-buffer design, the DMA must be restarted *after* the USB transfer is complete. This means the system is "blind" (not sampling) during 99% of its uptime.
+3.  **Need for Double Buffering:** The v0.2 measurements proved that high-fidelity streaming requires a "Ping-Pong" architecture where the DMA fills Buffer B while the CPU handles the slow USB transport of Buffer A.
+
+> [!IMPORTANT]
+> This version validated that the RP2040 hardware (DMA/Timer) is capable of 500 kHz sampling with 0 jitter, but the software architecture must evolve to hide the USB latency.
