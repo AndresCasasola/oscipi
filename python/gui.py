@@ -544,6 +544,37 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         tel_layout = QtWidgets.QVBoxLayout(tel_tab)
         tel_layout.setContentsMargins(4, 4, 4, 4)
 
+        # Telemetry Header with Export Button
+        tel_header_layout = QtWidgets.QHBoxLayout()
+        tel_header_label = QtWidgets.QLabel("TELEMETRY METRICS")
+        tel_header_label.setStyleSheet("color: #72C748; font-size: 10px; font-weight: bold; letter-spacing: 1px;")
+        tel_header_layout.addWidget(tel_header_label)
+        tel_header_layout.addStretch()
+        
+        self.export_tel_btn = QtWidgets.QPushButton("↓  Export Markdown")
+        self.export_tel_btn.setFixedSize(160, 32)
+        self.export_tel_btn.setStyleSheet("""
+            QPushButton { 
+                background-color: #0d2040; 
+                color: #3D8EFF; 
+                border: 1px solid #2a5aaa;
+                border-radius: 6px; 
+                padding: 5px 12px; 
+                font-size: 12px;
+                font-weight: bold;
+                letter-spacing: 0.5px;
+            }
+            QPushButton:hover {
+                background-color: #1a3a6a;
+                border-color: #3D8EFF;
+                color: #6db3ff;
+            }
+            QPushButton:pressed { background-color: #0a1a30; }
+        """)
+        self.export_tel_btn.clicked.connect(self.export_telemetry_markdown)
+        tel_header_layout.addWidget(self.export_tel_btn)
+        tel_layout.addLayout(tel_header_layout)
+
         self.tel_text = QtWidgets.QTextEdit()
         self.tel_text.setReadOnly(True)
         self.tel_text.setMaximumHeight(170)
@@ -845,6 +876,79 @@ class OscilloscopeUI(QtWidgets.QMainWindow):
         heights = [t_dma, t_meta, t_chk, t_usb]
         for bar_item, h in zip(self.tel_bar_items, heights):
             bar_item.setOpts(height=h)
+
+    def export_telemetry_markdown(self):
+        """Calculates the averages of all captured telemetry data and copies a markdown table to the clipboard."""
+        if self.hist_count == 0:
+            QtWidgets.QMessageBox.warning(self, "Export Failed", "No telemetry data captured yet.")
+            return
+            
+        count = max(1, self.hist_count)
+        t_dma = int(np.mean(self.hist_tel_dma[:count]))
+        t_meta = int(np.mean(self.hist_tel_meta[:count]))
+        t_chk = int(np.mean(self.hist_tel_chk[:count]))
+        t_usb = int(np.mean(self.hist_tel_usb[:count]))
+        t_loop = int(np.mean(self.hist_tel_loop[:count]))
+        
+        # Use asterisks for values that are likely zero due to resolution (as seen in reports)
+        meta_val = f"{t_meta:,}" if t_meta > 0 else "0*"
+        chk_val = f"{t_chk:,}" if t_chk > 0 else "0*"
+        
+        md = [
+            "| Phase | Duration (µs) | Duty Cycle (%) |",
+            "| --- | --- | --- |",
+            f"| **DMA Hardware Transfer** | {t_dma:,} | {t_dma/max(1,t_loop)*100:.1f}% |",
+            f"| **Metadata Handling** | {meta_val} | {t_meta/max(1,t_loop)*100:.1f}% |",
+            f"| **Checksum Calculation (XOR)** | {chk_val} | {t_chk/max(1,t_loop)*100:.1f}% |",
+            f"| **USB CDC Transport** | {t_usb:,} | {t_usb/max(1,t_loop)*100:.1f}% |",
+            f"| **Total Loop Cycle** | **{t_loop:,}** | **100%** |"
+        ]
+        
+        if t_meta == 0 or t_chk == 0:
+            md.append("| *Measurement below 1 µs timer resolution. | | |")
+            
+        md_text = "\n".join(md)
+        
+        clipboard = QtWidgets.QApplication.clipboard()
+        clipboard.setText(md_text)
+        
+        # Temporarily change the button text to confirm the copy
+        self.export_tel_btn.setText("✓  Copied!")
+        self.export_tel_btn.setStyleSheet("""
+            QPushButton { 
+                background-color: #0d2a1a; 
+                color: #72C748; 
+                border: 1px solid #72C748;
+                border-radius: 6px; 
+                padding: 5px 12px; 
+                font-size: 12px;
+                font-weight: bold;
+                letter-spacing: 0.5px;
+            }
+        """)
+        QtCore.QTimer.singleShot(2000, self._reset_export_btn)
+
+    def _reset_export_btn(self):
+        """Resets the Export MD button to its original state."""
+        self.export_tel_btn.setText("↓  Export Markdown")
+        self.export_tel_btn.setStyleSheet("""
+            QPushButton { 
+                background-color: #0d2040; 
+                color: #3D8EFF; 
+                border: 1px solid #2a5aaa;
+                border-radius: 6px; 
+                padding: 5px 12px; 
+                font-size: 12px;
+                font-weight: bold;
+                letter-spacing: 0.5px;
+            }
+            QPushButton:hover {
+                background-color: #1a3a6a;
+                border-color: #3D8EFF;
+                color: #6db3ff;
+            }
+            QPushButton:pressed { background-color: #0a1a30; }
+        """)
 
     def update_timebase(self, value):
         """Updates the X-axis range to zoom into the latest samples on the right side of the screen."""
