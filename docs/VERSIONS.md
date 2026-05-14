@@ -95,10 +95,6 @@ Managing multiple DMA channels and synchronization flags in a bare-metal environ
 
 ---
 
-Tienes toda la razón, se me cruzaron los cables con el orden de las versiones. He reajustado el contenido para que coincida exactamente con la progresión lógica que definiste: primero la entrada de datos reales (**ADC Streaming**), luego la migración al sistema operativo (**RTOS**) y finalmente la capacidad de control (**Command Console**).
-
----
-
 ### v0.4 - ADC Streaming
 
 #### Description
