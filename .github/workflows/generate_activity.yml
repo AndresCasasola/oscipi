@@ -1,0 +1,45 @@
+name: Generate Project Activity Cards
+
+on:
+  schedule:
+    # Runs every day at midnight UTC
+    - cron: '0 0 * * *'
+  workflow_dispatch: # Allows manual triggering from the Actions tab
+  push:
+    branches:
+      - main
+      - develop
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    name: Update Activity Cards
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Generate Summary Cards
+        uses: vn7n24fzkq/github-profile-summary-cards@release
+        env:
+          # GitHub Token is automatically provided by the runner
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          username: ${{ github.repository_owner }}
+          theme: tokyonight
+
+      - name: Commit and Push Generated SVGs
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          # Check if changes exist in the output directory to avoid empty commits
+          if [ -d "profile-summary-card-output" ]; then
+            git add profile-summary-card-output/
+            # Only commit if there are changes
+            if ! git diff --cached --quiet; then
+              git commit -m "chore: update repository activity graphs [skip ci]"
+              git push
+            fi
+          fi

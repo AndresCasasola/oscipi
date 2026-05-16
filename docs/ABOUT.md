@@ -2,6 +2,9 @@
 
 **Oscipi** is an application designed to transform a Raspberry Pi Pico into a **professional digital oscilloscope**. It is the ideal tool for engineers, makers, and students who need to visualize electrical signals in real-time with a level of precision and fluidity that entry-level solutions simply cannot provide.
 
+## Project Activity
+![Commit Matrix](../profile-summary-card-output/tokyonight/0-profile-details.svg)
+
 ## What is Oscipi?
 
 At its core, it is a high-speed "listening" system. While a multimeter gives you a static number (e.g., 3.3V), **Oscipi** allows you to see the "movie" of that electricity: how it rises, how it falls, whether it has noise, or if it is behaving as it should.
