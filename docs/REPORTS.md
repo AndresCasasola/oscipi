@@ -1,5 +1,47 @@
 # Oscipi Reports
 
+## v0.1 - Manual CPU Sampling
+
+### 1. Performance Measurement
+| Phase | Operation | Estimated Time | Estimation Method |
+| :--- | :--- | :--- | :--- |
+| **Capture** | **Software Delay Loop** | **768 ms** | **Mathematical:** $1024 \text{ samples} \times 750 \mu\text{s}$. |
+| **Processing** | Metadata & Checksum | **~20 µs** | **Cycle Counting:** Minimal CPU overhead. |
+| **I/O** | **USB-CDC Send** | **~150 ms** | **Empirical:** Typical blocking time for a 2KB buffer on a generic host. |
+
+### 2. Measured Data (Estimations)
+
+#### Internal MCU Phase Distribution
+
+```mermaid
+pie
+    title "MCU Phase Distribution (v0.1)"
+    "CPU Capture (Sleep)" : 768000
+    "Processing (CRC)" : 20
+    "USB Transport" : 150000
+```
+
+| Phase | Duration (µs) | Duty Cycle (%) |
+| --- | --- | --- |
+| **CPU Capture (Sleep)** | 768,000 | 83.7% |
+| **Processing (CRC)** | 20 | 0.0% |
+| **USB CDC Transport** | 150,000 | 16.3% |
+| **Total Loop Cycle** | **918,020** | **100%** |
+
+### 3. Technical Analysis
+
+#### The "Artifical" Bottleneck
+In this version, the system is intentionally slow. The CPU spends **83.7%** of its time executing `sleep_us()` to simulate a low-frequency capture. This makes the system extremely inefficient, as the processor is "spinning" without performing any useful work for the majority of the cycle.
+
+#### Timing Jitter
+Because the timing is handled by software delays, any internal MCU interrupts or background processing causes immediate jitter in the sample spacing. This results in a "wavering" signal when visualized in the Python GUI.
+
+### 4. Conclusion & Upgrade Path
+The v0.1 proof-of-concept confirmed the feasibility of the custom framing protocol but highlighted the catastrophic inefficiency of software-timed loops.
+
+**Decision:** Delegate timing to the **Hardware Timer** and data movement to the **DMA Engine** to achieve kHz/MHz speeds and 0% capture jitter.
+
+
 ## v0.2 - DMA (Single Buffer)
 
 ### 1. Experiment Overview
