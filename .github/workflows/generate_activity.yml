@@ -28,7 +28,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           username: ${{ github.repository_owner }}
-          theme: tokyonight
+          theme: github
+
+      - name: Generate Repository Heatmap
+        run: python scripts/generate_contribution_graph.py
 
       - name: Commit and Push Generated SVGs
         run: |
@@ -39,7 +42,7 @@ jobs:
             git add profile-summary-card-output/
             # Only commit if there are changes
             if ! git diff --cached --quiet; then
-              git commit -m "chore: update repository activity graphs [skip ci]"
+              git commit -m "chore: update repository activity graphs and heatmap [skip ci]"
               git push
             fi
           fi
